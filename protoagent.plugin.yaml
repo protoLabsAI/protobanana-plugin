@@ -1,0 +1,43 @@
+id: protobanana
+name: protoBanana Images
+version: 0.1.0
+description: >-
+  Native image generation and editing via the protoBanana gateway (self-hosted
+  ComfyUI workflows behind LiteLLM): text-to-image, instruction edits,
+  identity-preserving edits (Krea 2, single + two-ref), region edits, background
+  removal, multi-image composition, outpainting, and typography posters
+  (Ideogram 4). Results land in the core media store, render inline in chat,
+  and — on a vision model — are attached so the agent can see what it made.
+repository: https://github.com/protoLabsAI/protobanana-plugin
+
+# All traffic rides graph.sdk.gateway_client() (#1931) — the configured model
+# gateway api_base with bearer auth and the WAF-allowlisted UA. No other host
+# is ever contacted (the api_base host is egress-trusted per ADR 0008; image
+# backends are reached only THROUGH the gateway, never directly).
+capabilities:
+  network: []
+  filesystem: scoped   # reads back prior results from the core media store; writes only via registry.save_media
+
+config_section: protobanana
+config:
+  gen_model: protolabs/qwen-image
+  edit_model: protolabs/qwen-image-edit
+  chat_model: protolabs/qwen-image-chat        # compose rides chat (edits is single-image by spec)
+  bgremove_model: protolabs/qwen-image-bgremove
+  region_model: protolabs/qwen-image-region-edit
+  outpaint_model: protolabs/qwen-image-outpaint
+  identity_model: protolabs/krea2-identity-edit
+  typography_model: protolabs/ideogram-4
+  default_size: 1024x1024
+  timeout_s: 300
+  show_model: true     # attach results via multimodal_tool_result (#1930) so a vision model sees them
+
+settings:
+  - { key: gen_model, label: "Text-to-image model", type: string, description: "Gateway alias for /images/generations (must exist in the gateway's model_list)." }
+  - { key: edit_model, label: "Edit model", type: string, description: "Gateway alias for single-image instruction edits." }
+  - { key: chat_model, label: "Compose (chat) model", type: string, description: "Auto-routing chat alias used for multi-image composition." }
+  - { key: identity_model, label: "Identity-edit model", type: string, description: "Krea 2 identity-edit alias (stem krea2_* on the gateway)." }
+  - { key: typography_model, label: "Typography model", type: string, description: "Ideogram 4 alias for text-heavy posters/logos." }
+  - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
+  - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }
+  - { key: show_model, label: "Show results to the model", type: bool, description: "Attach generated images to the tool result so a vision model can critique its own output (capped at 2 MiB/image by core)." }

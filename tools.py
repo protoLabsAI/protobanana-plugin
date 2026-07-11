@@ -202,8 +202,12 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         image_ref: The photo to edit (single-ref) or the scene (two-ref).
         prompt: The edit/staging instruction.
         person_ref: The person's reference photo (two-ref mode only).
-        grounding_px: Quality dial 512–1536 (0 = default 768). Lower favors
-            following the edit instruction; higher favors facial likeness.
+        grounding_px: Quality dial 512–1536 (0 = default 768, which is right
+            for most edits). Lower favors the edit instruction; higher favors
+            facial likeness but can make the model drop the subject from busy
+            scenes — only raise it when likeness visibly needs the boost.
+            Always state the subject's role explicitly in the prompt (e.g.
+            "she is the foreground subject") when restaging into a new scene.
         seed: Fixed seed; -1 = random.
         realism: Set true when the subject is a human/portrait and the result
             should look like a natural photograph — adds a realism adapter that

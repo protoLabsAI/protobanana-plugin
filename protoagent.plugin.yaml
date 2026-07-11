@@ -18,6 +18,10 @@ capabilities:
   network: []
   filesystem: scoped   # reads back prior results from the core media store; writes only via registry.save_media
 
+# Pillow shrinks oversized person refs under the gateway's 1MB form-part cap
+# (only imported when a ref is actually too big).
+requires_pip: ["pillow>=10"]
+
 config_section: protobanana
 config:
   gen_model: protolabs/qwen-image

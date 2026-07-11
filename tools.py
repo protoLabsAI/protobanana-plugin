@@ -86,6 +86,33 @@ def _resolve_image(ref: str) -> bytes:
     raise ValueError(f"can't resolve image reference {ref!r}")
 
 
+def _person_data_url(raw: bytes) -> str:
+    """Person ref → data URL small enough for the gateway's multipart cap.
+
+    The LiteLLM proxy rejects any non-file form part over 1024KB, and the
+    person ref rides a text field (data URL) because /v1/images/edits is
+    single-image by spec. The server caps the person ref to ~1MP anyway, so
+    shrinking client-side loses nothing."""
+    b64 = base64.b64encode(raw).decode()
+    if len(b64) <= 900_000:
+        return "data:image/png;base64," + b64
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except ImportError:
+        raise ValueError(
+            "person reference exceeds the gateway's 1MB form-part cap and Pillow "
+            "isn't installed to shrink it — run: protoagent plugin install-deps protobanana"
+        )
+
+
 def _png_dims(raw: bytes) -> str:
     if len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n":
         w, h = struct.unpack(">II", raw[16:24])
@@ -220,8 +247,7 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         if grounding_px:
             fields["grounding_px"] = grounding_px
         if person_ref.strip():
-            person = _resolve_image(person_ref)
-            fields["person_image"] = "data:image/png;base64," + base64.b64encode(person).decode()
+            fields["person_image"] = _person_data_url(_resolve_image(person_ref))
         model = CFG["realism_identity_model"] if realism else CFG["identity_model"]
         raw = await client.edit(model, prompt, _resolve_image(image_ref), fields=fields)
         return _finish(raw, prompt, {"tool": "identity_edit", "prompt": prompt,

@@ -26,6 +26,13 @@ inline in chat, and — on a vision model — is attached to the tool result so 
 protoagent plugin install https://github.com/protoLabsAI/protobanana-plugin
 ```
 
+Optional: `pillow` enables automatic shrinking of oversized two-ref person
+references (the gateway caps multipart form parts at 1MB). Server installs:
+`uv pip install pillow` in the agent venv. Without it, everything works except
+two-ref identity edits with person refs over ~0.7MB, which return a readable
+error. Not declared in `requires_pip` so the frozen **desktop app** can install
+this plugin (protoAgent#1631).
+
 Requires the gateway's `model_list` to expose protoBanana aliases (see
 `protoagent.plugin.yaml` for the defaults — `protolabs/qwen-image` etc.; every alias is a
 plugin setting). No extra pip deps, no extra network hosts: all traffic rides

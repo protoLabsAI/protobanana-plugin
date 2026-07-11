@@ -18,9 +18,12 @@ capabilities:
   network: []
   filesystem: scoped   # reads back prior results from the core media store; writes only via registry.save_media
 
-# Pillow shrinks oversized person refs under the gateway's 1MB form-part cap
-# (only imported when a ref is actually too big).
-requires_pip: ["pillow>=10"]
+# OPTIONAL: Pillow shrinks oversized person refs under the gateway's 1MB
+# form-part cap (imported lazily, only when a two-ref person image is too
+# big; the tool returns a readable error without it). Not declared in
+# requires_pip because the frozen desktop runtime refuses plugins with
+# non-bundled pip deps (protoAgent#1631) — on server installs, add it with:
+#   uv pip install pillow   (or pip install pillow in the agent's venv)
 
 config_section: protobanana
 config:

@@ -97,6 +97,8 @@ def _finish(raw: bytes, caption: str, meta: dict) -> str:
     alt = " ".join((caption or "generated image").split())[:120].replace("[", "(").replace("]", ")")
     text = (
         f"Done — {_png_dims(raw)} image saved as `{ref.id}`.\n\n"
+        f"To show the user the image, include this markdown line VERBATIM "
+        f"(exact URL, do not paraphrase it away) in your reply:\n"
         f"![{alt}]({ref.url})\n\n"
         f"Pass `{ref.id}` as the image reference to edit this result further."
     )

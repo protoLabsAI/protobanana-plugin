@@ -32,6 +32,7 @@ _DEFAULTS = {
     "region_model": "protolabs/qwen-image-region-edit",
     "outpaint_model": "protolabs/qwen-image-outpaint",
     "identity_model": "protolabs/krea2-identity-edit",
+    "realism_identity_model": "protolabs/krea2-identity-edit-realism",
     "typography_model": "protolabs/ideogram-4",
     "default_size": "1024x1024",
     "timeout_s": 300,
@@ -189,7 +190,7 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1) -> str:
 
 @tool
 async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
-                        grounding_px: int = 0, seed: int = -1) -> str:
+                        grounding_px: int = 0, seed: int = -1, realism: bool = False) -> str:
     """Edit or restage a photo while preserving a person's identity/likeness (Krea 2).
 
     Two modes:
@@ -204,6 +205,10 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         grounding_px: Quality dial 512–1536 (0 = default 768). Lower favors
             following the edit instruction; higher favors facial likeness.
         seed: Fixed seed; -1 = random.
+        realism: Set true when the subject is a human/portrait and the result
+            should look like a natural photograph — adds a realism adapter that
+            markedly improves face quality and skin texture. Leave false for
+            stylized/illustrated/non-photographic results.
     Returns markdown with the result and its media id, or a readable error.
     """
     try:
@@ -213,9 +218,10 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         if person_ref.strip():
             person = _resolve_image(person_ref)
             fields["person_image"] = "data:image/png;base64," + base64.b64encode(person).decode()
-        raw = await client.edit(CFG["identity_model"], prompt, _resolve_image(image_ref), fields=fields)
+        model = CFG["realism_identity_model"] if realism else CFG["identity_model"]
+        raw = await client.edit(model, prompt, _resolve_image(image_ref), fields=fields)
         return _finish(raw, prompt, {"tool": "identity_edit", "prompt": prompt,
-                                     "two_ref": bool(person_ref.strip())})
+                                     "two_ref": bool(person_ref.strip()), "realism": realism})
     except Exception as e:
         return _err(e)
 

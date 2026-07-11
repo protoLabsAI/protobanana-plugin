@@ -28,6 +28,7 @@ config:
   region_model: protolabs/qwen-image-region-edit
   outpaint_model: protolabs/qwen-image-outpaint
   identity_model: protolabs/krea2-identity-edit
+  realism_identity_model: protolabs/krea2-identity-edit-realism
   typography_model: protolabs/ideogram-4
   default_size: 1024x1024
   timeout_s: 300
@@ -39,6 +40,7 @@ settings:
   - { key: edit_model, label: "Edit model", type: string, description: "Gateway alias for single-image instruction edits." }
   - { key: chat_model, label: "Compose (chat) model", type: string, description: "Auto-routing chat alias used for multi-image composition." }
   - { key: identity_model, label: "Identity-edit model", type: string, description: "Krea 2 identity-edit alias (stem krea2_* on the gateway)." }
+  - { key: realism_identity_model, label: "Realism identity model", type: string, description: "Alias used when identity_edit is called with realism=true — realism-LoRA variant for photographic human/portrait results." }
   - { key: typography_model, label: "Typography model", type: string, description: "Ideogram 4 alias for text-heavy posters/logos." }
   - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
   - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }

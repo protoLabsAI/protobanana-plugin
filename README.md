@@ -11,7 +11,7 @@ inline in chat, and — on a vision model — is attached to the tool result so 
 
 | Tool | Route | Use |
 |---|---|---|
-| `generate_image` | `/images/generations` | Text-to-image |
+| `generate_image` | `/images/generations` | Text-to-image — `draft: true` routes to the 4-step Lightning tier (~10s vs ~32s warm) for rapid prototyping |
 | `edit_image` | `/images/edits` | Global/semantic instruction edits |
 | `identity_edit` | `/images/edits` (krea2 stems) | Face/identity-preserving edits — single-ref, or scene + person two-ref |
 | `region_edit` | `/images/edits` (+`grounding`) | Change one object, leave the rest untouched |

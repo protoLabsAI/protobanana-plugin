@@ -25,6 +25,7 @@ CFG: dict = {}
 
 _DEFAULTS = {
     "gen_model": "protolabs/qwen-image",
+    "fast_gen_model": "protolabs/qwen-image-turbo",
     "edit_model": "protolabs/qwen-image-edit",
     "chat_model": "protolabs/qwen-image-chat",
     "bgremove_model": "protolabs/qwen-image-bgremove",
@@ -140,7 +141,8 @@ def _seed(seed: int) -> int | None:
 # ------------------------------------------------------------------ tools
 
 @tool
-async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_prompt: str = "") -> str:
+async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_prompt: str = "",
+                         draft: bool = False) -> str:
     """Generate an image from a text prompt.
 
     Args:
@@ -148,12 +150,17 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
         size: WxH like "1024x1024" (default from plugin settings).
         seed: Fixed seed for reproducibility; -1 = random.
         negative_prompt: What to avoid (optional).
+        draft: True = fast 4-step draft (~10s, great for prototyping/iterating);
+            False = full-quality render (~30s). Use draft when the user wants
+            quick concepts, options, or is iterating on a prompt.
     Returns markdown with the saved image and its media id, or a readable error.
     """
     try:
-        raw = await client.generate(CFG["gen_model"], prompt, size or CFG["default_size"],
+        model = CFG["fast_gen_model"] if draft else CFG["gen_model"]
+        raw = await client.generate(model, prompt, size or CFG["default_size"],
                                     seed=_seed(seed), negative_prompt=negative_prompt or None)
-        return _finish(raw, prompt, {"tool": "generate_image", "prompt": prompt, "model": CFG["gen_model"]})
+        return _finish(raw, prompt, {"tool": "generate_image", "prompt": prompt, "model": model,
+                                     "draft": draft})
     except Exception as e:
         return _err(e)
 

@@ -21,6 +21,7 @@ capabilities:
 config_section: protobanana
 config:
   gen_model: protolabs/qwen-image
+  fast_gen_model: protolabs/qwen-image-turbo
   edit_model: protolabs/qwen-image-edit
   chat_model: protolabs/qwen-image-chat        # compose rides chat (edits is single-image by spec)
   bgremove_model: protolabs/qwen-image-bgremove
@@ -34,6 +35,7 @@ config:
 
 settings:
   - { key: gen_model, label: "Text-to-image model", type: string, description: "Gateway alias for /images/generations (must exist in the gateway's model_list)." }
+  - { key: fast_gen_model, label: "Draft (fast) model", type: string, description: "Alias used when generate_image is called with draft=true — a distilled few-step variant." }
   - { key: edit_model, label: "Edit model", type: string, description: "Gateway alias for single-image instruction edits." }
   - { key: chat_model, label: "Compose (chat) model", type: string, description: "Auto-routing chat alias used for multi-image composition." }
   - { key: identity_model, label: "Identity-edit model", type: string, description: "Krea 2 identity-edit alias (stem krea2_* on the gateway)." }

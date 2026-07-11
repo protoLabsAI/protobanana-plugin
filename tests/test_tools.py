@@ -143,3 +143,16 @@ def test_bad_image_ref_is_a_readable_error(plugin):
     mod, _ = plugin
     out = run(mod.tools.edit_image.ainvoke({"image_ref": "nope.png", "prompt": "brighter"}))
     assert out.startswith("Error:")
+
+
+def test_generate_draft_uses_fast_model(plugin, monkeypatch):
+    mod, _ = plugin
+    seen = {}
+
+    async def fake_generate(model, prompt, size, **kw):
+        seen["model"] = model
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "generate", fake_generate)
+    run(mod.tools.generate_image.ainvoke({"prompt": "a quick concept", "draft": True}))
+    assert seen["model"] == "protolabs/qwen-image-turbo"

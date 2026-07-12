@@ -171,3 +171,48 @@ def test_identity_edit_realism_uses_realism_model(plugin, monkeypatch):
                                          "prompt": "natural photo at the beach",
                                          "realism": True}))
     assert seen["model"] == "protolabs/krea2-identity-edit-realism"
+
+
+def _mk_state():
+    from langchain_core.messages import HumanMessage
+    return {"messages": [HumanMessage(id="m1", content=[
+        {"type": "text", "text": "remove the background of these"},
+        {"type": "image_url", "image_url": {"url": DATA_URL}},
+        {"type": "image_url", "image_url": {"url": DATA_URL}},
+    ])]}
+
+
+def test_attachment_bridge_saves_and_annotates(plugin):
+    mod, reg = plugin
+    assert len(reg.middlewares) == 1
+    mw = reg.middlewares[0](object())  # factory(config)
+    update = mw.before_model(_mk_state(), None)
+    assert update is not None
+    msg = update["messages"][0]
+    assert msg.id == "m1"
+    note = msg.content[-1]["text"]
+    assert "image 1 = `fake-media-1`" in note and "image 2 = `fake-media-2`" in note
+    assert len(reg.saved_media) == 2
+    assert reg.saved_media[0][2]["source"] == "user_attachment"
+
+
+def test_attachment_bridge_is_idempotent(plugin):
+    mod, reg = plugin
+    mw = reg.middlewares[0](object())
+    state = _mk_state()
+    first = mw.before_model(state, None)
+    state["messages"] = first["messages"]
+    assert mw.before_model(state, None) is None  # marker present → no-op
+    assert len(reg.saved_media) == 2  # not re-saved
+
+
+def test_attachment_bridge_skips_plain_text_and_idless(plugin):
+    from langchain_core.messages import HumanMessage
+    mod, reg = plugin
+    mw = reg.middlewares[0](object())
+    state = {"messages": [
+        HumanMessage(id="t1", content="just text"),
+        HumanMessage(id=None, content=[{"type": "image_url", "image_url": {"url": DATA_URL}}]),
+    ]}
+    assert mw.before_model(state, None) is None
+    assert reg.saved_media == []

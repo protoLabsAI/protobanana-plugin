@@ -13,7 +13,10 @@ store serves the files and the chat markdown renders them.
 
 
 def register(registry) -> None:
-    from . import tools
+    from . import middleware, tools
 
     tools.configure(registry)
     registry.register_tools(tools.get_tools())
+    # Attachment bridge: user-attached images → media-store ids the model can
+    # hand to the image tools (single or multiple attachments).
+    registry.register_middleware(middleware.build_factory(registry))

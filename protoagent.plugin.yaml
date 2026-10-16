@@ -1,6 +1,6 @@
 id: protobanana
 name: protoBanana Images
-version: 0.1.0
+version: 0.2.0
 description: >-
   Native image generation and editing via the protoBanana gateway (self-hosted
   ComfyUI workflows behind LiteLLM): text-to-image, instruction edits,

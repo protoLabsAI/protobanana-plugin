@@ -155,7 +155,21 @@ def test_generate_draft_uses_fast_model(plugin, monkeypatch):
 
     monkeypatch.setattr(mod.client, "generate", fake_generate)
     run(mod.tools.generate_image.ainvoke({"prompt": "a quick concept", "draft": True}))
-    assert seen["model"] == "protolabs/qwen-image-turbo"
+    assert seen["model"] == "protolabs/qwen-image-2-1-turbo"
+
+
+def test_edit_draft_uses_fast_edit_model(plugin, monkeypatch):
+    mod, _ = plugin
+    seen = []
+
+    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
+        seen.append(model)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    run(mod.tools.edit_image.ainvoke({"image_ref": DATA_URL, "prompt": "make it night", "draft": True}))
+    run(mod.tools.edit_image.ainvoke({"image_ref": DATA_URL, "prompt": "make it night"}))
+    assert seen == ["protolabs/qwen-image-edit-turbo", "protolabs/qwen-image-edit"]
 
 
 def test_identity_edit_realism_uses_realism_model(plugin, monkeypatch):

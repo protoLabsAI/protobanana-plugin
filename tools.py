@@ -25,8 +25,9 @@ CFG: dict = {}
 
 _DEFAULTS = {
     "gen_model": "protolabs/qwen-image",
-    "fast_gen_model": "protolabs/qwen-image-turbo",
+    "fast_gen_model": "protolabs/qwen-image-2-1-turbo",
     "edit_model": "protolabs/qwen-image-edit",
+    "fast_edit_model": "protolabs/qwen-image-edit-turbo",
     "chat_model": "protolabs/qwen-image-chat",
     "bgremove_model": "protolabs/qwen-image-bgremove",
     "region_model": "protolabs/qwen-image-region-edit",
@@ -178,7 +179,7 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
         size: WxH like "1024x1024" (default from plugin settings).
         seed: Fixed seed for reproducibility; -1 = random.
         negative_prompt: What to avoid (optional).
-        draft: True = fast 4-step draft (~10s, great for prototyping/iterating);
+        draft: True = fast 8-step Turbo draft (~10s, great for prototyping/iterating);
             False = full-quality render (~30s). Use draft when the user wants
             quick concepts, options, or is iterating on a prompt.
     Returns markdown with the saved image and its media id, or a readable error.
@@ -194,7 +195,7 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
 
 
 @tool
-async def edit_image(image_ref: str, prompt: str, seed: int = -1) -> str:
+async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = False) -> str:
     """Edit an existing image with a natural-language instruction.
 
     Good for global/semantic changes ("make it night", "turn the car red",
@@ -205,12 +206,17 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1) -> str:
         image_ref: A media id from a previous result, a /media/ URL, a data: URL, or a file path.
         prompt: The edit instruction.
         seed: Fixed seed; -1 = random.
+        draft: True = fast 8-step Turbo edit (~10s vs ~38s) for quick iterations;
+            False = full-quality edit. Use draft while the user is exploring
+            variations, then re-run without it for the final.
     Returns markdown with the edited image and its media id, or a readable error.
     """
     try:
-        raw = await client.edit(CFG["edit_model"], prompt, _resolve_image(image_ref),
+        model = CFG["fast_edit_model"] if draft else CFG["edit_model"]
+        raw = await client.edit(model, prompt, _resolve_image(image_ref),
                                 fields={"seed": _seed(seed)})
-        return _finish(raw, prompt, {"tool": "edit_image", "prompt": prompt, "source": image_ref})
+        return _finish(raw, prompt, {"tool": "edit_image", "prompt": prompt, "source": image_ref,
+                                     "model": model, "draft": draft})
     except Exception as e:
         return _err(e)
 

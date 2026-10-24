@@ -58,3 +58,5 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 ```bash
 python -m pytest tests/   # host-free — vendored testkit, stubbed gateway
 ```
+
+<!-- ops #119 QA panel neutral check (throwaway, will not merge) -->

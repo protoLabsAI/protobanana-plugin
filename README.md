@@ -2,10 +2,10 @@
 
 Native image generation and editing for [protoAgent](https://github.com/protoLabsAI/protoAgent),
 backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway — self-hosted
-ComfyUI workflows (Qwen-Image, Krea 2 identity edit, Ideogram 4, SAM 3 region edit, BiRefNet)
+ComfyUI workflows (Qwen-Image-2.1, Krea 2 identity edit, SAM 3 region edit, BiRefNet)
 behind LiteLLM.
 
-The agent gets eight tools; every result is persisted to the core media store, renders
+The agent gets seven tools; every result is persisted to the core media store, renders
 inline in chat, and — on a vision model — is attached to the tool result so the agent can
 **see** what it just made and iterate (generate → look → refine).
 
@@ -18,7 +18,6 @@ inline in chat, and — on a vision model — is attached to the tool result so 
 | `remove_background` | `/images/edits` (bgremove) | Sticker/cutout on transparency |
 | `compose_images` | `/chat/completions` (auto-route) | Combine 2–3 references into one image |
 | `outpaint_image` | `/images/edits` (+margins) | Extend the canvas |
-| `typography_image` | `/images/generations` (ideogram) | Posters/logos with accurate text |
 
 ## Install
 
@@ -48,8 +47,9 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 - **Identity edit ordering is load-bearing**: two-ref mode is `image_ref` = scene,
   `person_ref` = person. `grounding_px` (512–1536, default 768) trades edit adherence
   (lower) against facial likeness (higher).
-- **Typography (Ideogram 4)** has a built-in stochastic safety refusal that returns a flat
-  gray card. The plugin deliberately does **not** auto-retry refusals; reword or ask the user.
+- **Text in images** (posters, logos, signs) goes through `generate_image` — Qwen-Image-2.1
+  renders quoted text accurately, so there is no separate typography tool (Ideogram 4
+  was dropped in 0.3.0).
 - `show_model: false` turns off attaching results to the model (text-only models degrade
   automatically either way; core caps attachments at 2 MiB/image).
 

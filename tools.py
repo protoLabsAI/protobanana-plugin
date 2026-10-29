@@ -34,7 +34,6 @@ _DEFAULTS = {
     "outpaint_model": "protolabs/qwen-image-outpaint",
     "identity_model": "protolabs/krea2-identity-edit",
     "realism_identity_model": "protolabs/krea2-identity-edit-realism",
-    "typography_model": "protolabs/ideogram-4",
     "default_size": "1024x1024",
     "timeout_s": 300,
     "show_model": True,
@@ -52,7 +51,7 @@ def configure(registry) -> None:
 
 def get_tools() -> list:
     return [generate_image, edit_image, identity_edit, region_edit,
-            remove_background, compose_images, outpaint_image, typography_image]
+            remove_background, compose_images, outpaint_image]
 
 
 # ---------------------------------------------------------------- helpers
@@ -175,7 +174,9 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
     """Generate an image from a text prompt.
 
     Args:
-        prompt: What to draw — subject, style, composition, lighting.
+        prompt: What to draw — subject, style, composition, lighting. Renders
+            legible text well (posters, logos, signs, title cards): put the exact
+            words in double quotes, e.g. a poster saying "GRAND OPENING".
         size: WxH like "1024x1024" (default from plugin settings).
         seed: Fixed seed for reproducibility; -1 = random.
         negative_prompt: What to avoid (optional).
@@ -342,30 +343,5 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
                                 fields={"left": left, "top": top, "right": right,
                                         "bottom": bottom, "seed": _seed(seed)})
         return _finish(raw, prompt or "outpainted", {"tool": "outpaint_image", "prompt": prompt})
-    except Exception as e:
-        return _err(e)
-
-
-@tool
-async def typography_image(prompt: str, size: str = "", seed: int = -1) -> str:
-    """Generate a text-heavy image — poster, logo, sign, title card — with
-    accurate typography (Ideogram 4). Put the exact words to render in double
-    quotes inside the prompt: a poster saying "GRAND OPENING".
-
-    Note: this model has a built-in, stochastic safety refusal — a flat gray
-    result means it declined. That refusal is deliberate and NOT auto-retried;
-    reword the prompt or ask the user before trying again.
-
-    Args:
-        prompt: The design brief, with literal text in double quotes.
-        size: WxH like "1024x1024" (default from plugin settings).
-        seed: Fixed seed; -1 = random.
-    Returns markdown with the image and its media id, or a readable error.
-    """
-    try:
-        raw = await client.generate(CFG["typography_model"], prompt, size or CFG["default_size"],
-                                    seed=_seed(seed))
-        return _finish(raw, prompt, {"tool": "typography_image", "prompt": prompt,
-                                     "model": CFG["typography_model"]})
     except Exception as e:
         return _err(e)

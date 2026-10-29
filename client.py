@@ -2,7 +2,7 @@
 
 Three call shapes, matching how protoBanana dispatches:
 
-- ``generate``  → POST /images/generations (JSON) — gen + typography (Ideogram)
+- ``generate``  → POST /images/generations (JSON) — gen
 - ``edit``      → POST /images/edits (multipart) — edit / identity / region /
   bgremove / outpaint. The endpoint is single-image by OpenAI spec, so extra
   refs and knobs ride extra form fields (``person_image`` data URL,

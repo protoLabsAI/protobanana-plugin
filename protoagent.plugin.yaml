@@ -1,12 +1,11 @@
 id: protobanana
 name: protoBanana Images
-version: 0.2.0
+version: 0.3.0
 description: >-
   Native image generation and editing via the protoBanana gateway (self-hosted
   ComfyUI workflows behind LiteLLM): text-to-image, instruction edits,
   identity-preserving edits (Krea 2, single + two-ref), region edits, background
-  removal, multi-image composition, outpainting, and typography posters
-  (Ideogram 4). Results land in the core media store, render inline in chat,
+  removal, multi-image composition, and outpainting. Results land in the core media store, render inline in chat,
   and — on a vision model — are attached so the agent can see what it made.
 repository: https://github.com/protoLabsAI/protobanana-plugin
 
@@ -37,7 +36,6 @@ config:
   outpaint_model: protolabs/qwen-image-outpaint
   identity_model: protolabs/krea2-identity-edit
   realism_identity_model: protolabs/krea2-identity-edit-realism
-  typography_model: protolabs/ideogram-4
   default_size: 1024x1024
   timeout_s: 300
   show_model: true     # attach results via multimodal_tool_result (#1930) so a vision model sees them
@@ -50,7 +48,6 @@ settings:
   - { key: chat_model, label: "Compose (chat) model", type: string, description: "Auto-routing chat alias used for multi-image composition." }
   - { key: identity_model, label: "Identity-edit model", type: string, description: "Krea 2 identity-edit alias (stem krea2_* on the gateway)." }
   - { key: realism_identity_model, label: "Realism identity model", type: string, description: "Alias used when identity_edit is called with realism=true — realism-LoRA variant for photographic human/portrait results." }
-  - { key: typography_model, label: "Typography model", type: string, description: "Ideogram 4 alias for text-heavy posters/logos." }
   - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
   - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }
   - { key: show_model, label: "Show results to the model", type: bool, description: "Attach generated images to the tool result so a vision model can critique its own output (capped at 2 MiB/image by core)." }

@@ -13,12 +13,12 @@ when ``show_model`` is on they ride the multimodal envelope (#1930) instead.
 from __future__ import annotations
 
 import base64
-import struct
+import re
 from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import client
+from . import client, imaging
 
 _registry = None
 CFG: dict = {}
@@ -113,19 +113,69 @@ def _person_data_url(raw: bytes) -> str:
         )
 
 
-def _png_dims(raw: bytes) -> str:
-    if len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n":
-        w, h = struct.unpack(">II", raw[16:24])
-        return f"{w}x{h}"
-    return "image"
+def _dims(raw: bytes) -> str:
+    wh = imaging.png_size(raw)
+    return f"{wh[0]}x{wh[1]}" if wh else "image"
 
 
-def _finish(raw: bytes, caption: str, meta: dict) -> str:
-    """Persist to the core media store and build the tool result."""
+# Model sizes: multiples of 16 (VAE /8 + 2x2 patchify), within what the Qwen
+# gen workflows render sanely.
+_SIZE_STEP, _SIZE_MIN, _SIZE_MAX = 16, 256, 2048
+
+
+def _snap_size(size: str) -> tuple[int, int]:
+    """"WxH" → (w, h) snapped to the model's 16px grid and clamped to 256–2048.
+    Raises ValueError on garbage so the tool can say what it expected."""
+    m = re.fullmatch(r"\s*(\d+)\s*[x×*]\s*(\d+)\s*", size or "", re.IGNORECASE)
+    if not m:
+        raise ValueError(f"size must look like 1024x1024, got {size!r}")
+
+    def snap(v: int) -> int:
+        v = int(int(v) / _SIZE_STEP + 0.5) * _SIZE_STEP  # half-up, not banker's
+        return max(_SIZE_MIN, min(_SIZE_MAX, v))
+
+    return snap(m.group(1)), snap(m.group(2))
+
+
+_CAPTION_MAX = 80
+# Words that read badly right before an ellipsis ("…sitting in the…").
+_DANGLING = {"a", "an", "the", "and", "or", "but", "of", "in", "on", "at", "to", "for",
+             "with", "by", "from", "into", "onto", "over", "under", "as", "is", "are",
+             "its", "their", "his", "her", "that", "which", "while"}
+
+
+def _caption(text: str, prefix: str = "", limit: int = _CAPTION_MAX) -> str:
+    """A short, clean alt-text caption from a prompt.
+
+    Takes the first sentence (then the first comma/semicolon/dash clause if that
+    is still long), cuts at a word boundary with an ellipsis, and drops dangling
+    function words so it never ends "…sitting in t". Square brackets are
+    swapped for parentheses so the markdown image syntax stays intact."""
+    text = " ".join((text or "").split()).replace("[", "(").replace("]", ")")
+    budget = max(12, limit - len(prefix))
+    first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0].rstrip(".!? ")
+    if len(first) > budget:
+        clause = re.split(r"\s*[,;:]\s+|\s+[—–-]\s+", first, maxsplit=1)[0]
+        if len(clause) >= 16:  # a clause too short to mean anything isn't a caption
+            first = clause
+    if len(first) > budget:
+        words = first[: budget + 1].split(" ")
+        words = words[:-1] if len(words) > 1 else words  # last word may be cut
+        while len(words) > 1 and words[-1].lower().strip(",;:") in _DANGLING:
+            words.pop()
+        first = " ".join(words).rstrip(",;:—–- ") + "…"
+    return (prefix + first) if first else prefix.rstrip(": ") or "image"
+
+
+def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
+    """Persist to the core media store and build the tool result.
+
+    ``caption`` is the finished alt text (build it with ``_caption``); ``note``
+    is appended to the first line (size/transparency caveats for the model)."""
     ref = _registry.save_media(raw, "image/png", meta)
-    alt = " ".join((caption or "generated image").split())[:120].replace("[", "(").replace("]", ")")
+    alt = caption or "Generated image"
     text = (
-        f"Done — {_png_dims(raw)} image saved as `{ref.id}`.\n\n"
+        f"Done — {_dims(raw)} image saved as `{ref.id}`.{(' ' + note) if note else ''}\n\n"
         f"To show the user the image, include this markdown line VERBATIM "
         f"(exact URL, do not paraphrase it away) in your reply:\n"
         f"![{alt}]({ref.url})\n\n"
@@ -140,6 +190,25 @@ def _finish(raw: bytes, caption: str, meta: dict) -> str:
         except (ValueError, ImportError):
             pass  # over the core size cap (or old host) — inline markdown still renders
     return text
+
+
+def _size_note(raw: bytes, want: tuple[int, int] | None, what: str) -> str:
+    """Honest reporting: say so when the image isn't the size that was asked for."""
+    got = imaging.png_size(raw)
+    if not want or not got or tuple(got) == tuple(want):
+        return ""
+    return (f"Note: {what} {want[0]}x{want[1]} but the gateway returned "
+            f"{got[0]}x{got[1]} — tell the user the actual size.")
+
+
+def _transparency_note(prep: imaging.Prepared, restored: bool) -> str:
+    if not prep.had_alpha:
+        return ""
+    if restored:
+        return ("The input was transparent: it was edited on a white backdrop and its "
+                "transparency re-applied (set keep_transparency=false to keep the filled-in "
+                "backdrop instead).")
+    return "The input was transparent: it was flattened onto white for the edit."
 
 
 def _err(e: Exception) -> str:
@@ -177,7 +246,8 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
         prompt: What to draw — subject, style, composition, lighting. Renders
             legible text well (posters, logos, signs, title cards): put the exact
             words in double quotes, e.g. a poster saying "GRAND OPENING".
-        size: WxH like "1024x1024" (default from plugin settings).
+        size: WxH like "1024x1024" (default from plugin settings). Snapped to a
+            multiple of 16 within 256–2048; the result states the actual size.
         seed: Fixed seed for reproducibility; -1 = random.
         negative_prompt: What to avoid (optional).
         draft: True = fast 8-step Turbo draft (~10s, great for prototyping/iterating);
@@ -187,16 +257,19 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
     """
     try:
         model = CFG["fast_gen_model"] if draft else CFG["gen_model"]
-        raw = await client.generate(model, prompt, size or CFG["default_size"],
+        want = _snap_size(size or CFG["default_size"])
+        raw = await client.generate(model, prompt, f"{want[0]}x{want[1]}",
                                     seed=_seed(seed), negative_prompt=negative_prompt or None)
-        return _finish(raw, prompt, {"tool": "generate_image", "prompt": prompt, "model": model,
-                                     "draft": draft})
+        return _finish(raw, _caption(prompt), {"tool": "generate_image", "prompt": prompt,
+                                               "model": model, "draft": draft},
+                       note=_size_note(raw, want, "requested"))
     except Exception as e:
         return _err(e)
 
 
 @tool
-async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = False) -> str:
+async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = False,
+                     keep_transparency: bool = True) -> str:
     """Edit an existing image with a natural-language instruction.
 
     Good for global/semantic changes ("make it night", "turn the car red",
@@ -210,14 +283,22 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         draft: True = fast 8-step Turbo edit (~10s vs ~38s) for quick iterations;
             False = full-quality edit. Use draft while the user is exploring
             variations, then re-run without it for the final.
+        keep_transparency: For a transparent input (a cutout/sticker): True keeps
+            the result transparent where the input was; set False when the edit
+            should fill the empty area (e.g. "put it on a beach background").
+    The result keeps the input's dimensions.
     Returns markdown with the edited image and its media id, or a readable error.
     """
     try:
         model = CFG["fast_edit_model"] if draft else CFG["edit_model"]
-        raw = await client.edit(model, prompt, _resolve_image(image_ref),
-                                fields={"seed": _seed(seed)})
-        return _finish(raw, prompt, {"tool": "edit_image", "prompt": prompt, "source": image_ref,
-                                     "model": model, "draft": draft})
+        prep = imaging.prepare(_resolve_image(image_ref))
+        raw = await client.edit(model, prompt, prep.data, fields={"seed": _seed(seed)})
+        raw = imaging.finish_edit(raw, prep, keep_transparency=keep_transparency)
+        note = " ".join(filter(None, (_transparency_note(prep, keep_transparency),
+                                      _size_note(raw, prep.size, "the input was"))))
+        return _finish(raw, _caption(prompt, "Edit: "),
+                       {"tool": "edit_image", "prompt": prompt, "source": image_ref,
+                        "model": model, "draft": draft}, note=note)
     except Exception as e:
         return _err(e)
 
@@ -254,17 +335,24 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         if grounding_px:
             fields["grounding_px"] = grounding_px
         if person_ref.strip():
-            fields["person_image"] = _person_data_url(_resolve_image(person_ref))
+            fields["person_image"] = _person_data_url(imaging.prepare(_resolve_image(person_ref)).data)
         model = CFG["realism_identity_model"] if realism else CFG["identity_model"]
-        raw = await client.edit(model, prompt, _resolve_image(image_ref), fields=fields)
-        return _finish(raw, prompt, {"tool": "identity_edit", "prompt": prompt,
-                                     "two_ref": bool(person_ref.strip()), "realism": realism})
+        prep = imaging.prepare(_resolve_image(image_ref))
+        raw = await client.edit(model, prompt, prep.data, fields=fields)
+        # Restaging moves the subject, so the input's alpha no longer lines up:
+        # flatten-only (no black voids), keep the size when the shape held.
+        raw = imaging.finish_edit(raw, prep)
+        return _finish(raw, _caption(prompt, "Edit: "),
+                       {"tool": "identity_edit", "prompt": prompt,
+                        "two_ref": bool(person_ref.strip()), "realism": realism},
+                       note=_transparency_note(prep, False))
     except Exception as e:
         return _err(e)
 
 
 @tool
-async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1) -> str:
+async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
+                      keep_transparency: bool = True) -> str:
     """Edit ONE region/object of an image, leaving everything else untouched
     (SAM-grounded segmentation + inpaint).
 
@@ -273,13 +361,20 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1) 
         region: What to target, as a short noun phrase — "the red car", "her hat".
         prompt: What the region should become.
         seed: Fixed seed; -1 = random.
+        keep_transparency: For a transparent input (a cutout/sticker): True keeps
+            the result transparent where the input was; set False when the edit
+            should fill the empty area. To DELETE part of a cutout, use
+            remove_background on the result instead of painting it white.
     Returns markdown with the result and its media id, or a readable error.
     """
     try:
-        raw = await client.edit(CFG["region_model"], prompt, _resolve_image(image_ref),
+        prep = imaging.prepare(_resolve_image(image_ref))
+        raw = await client.edit(CFG["region_model"], prompt, prep.data,
                                 fields={"grounding": region, "seed": _seed(seed)})
-        return _finish(raw, f"{region} → {prompt}",
-                       {"tool": "region_edit", "region": region, "prompt": prompt})
+        raw = imaging.finish_edit(raw, prep, keep_transparency=keep_transparency)
+        return _finish(raw, _caption(f"{region} → {prompt}", "Edit: "),
+                       {"tool": "region_edit", "region": region, "prompt": prompt},
+                       note=_transparency_note(prep, keep_transparency))
     except Exception as e:
         return _err(e)
 
@@ -294,8 +389,13 @@ async def remove_background(image_ref: str) -> str:
     Returns markdown with the cutout and its media id, or a readable error.
     """
     try:
-        raw = await client.edit(CFG["bgremove_model"], "remove background", _resolve_image(image_ref))
-        return _finish(raw, "background removed", {"tool": "remove_background", "source": image_ref})
+        prep = imaging.prepare(_resolve_image(image_ref))
+        raw = await client.edit(CFG["bgremove_model"], "remove background", prep.data)
+        # Strip the old background's colour from the soft edges (halo), using
+        # the image that was actually matted as the reference.
+        raw = imaging.defringe(raw, prep.data)
+        return _finish(raw, "Cutout, background removed",
+                       {"tool": "remove_background", "source": image_ref})
     except Exception as e:
         return _err(e)
 
@@ -314,8 +414,10 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
         refs = [r for r in (image_refs or []) if str(r).strip()]
         if not 2 <= len(refs) <= 3:
             return f"Error: compose_images needs 2–3 image references, got {len(refs)}."
-        raw = await client.chat_compose(CFG["chat_model"], prompt, [_resolve_image(r) for r in refs])
-        return _finish(raw, prompt, {"tool": "compose_images", "prompt": prompt, "refs": len(refs)})
+        raw = await client.chat_compose(CFG["chat_model"], prompt,
+                                        [imaging.prepare(_resolve_image(r)).data for r in refs])
+        return _finish(raw, _caption(prompt, "Composite: "),
+                       {"tool": "compose_images", "prompt": prompt, "refs": len(refs)})
     except Exception as e:
         return _err(e)
 
@@ -338,10 +440,12 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
     try:
         if not any((left, top, right, bottom)):
             return "Error: give at least one non-zero margin (left/top/right/bottom)."
-        raw = await client.edit(CFG["outpaint_model"], prompt or "extend the scene",
-                                _resolve_image(image_ref),
+        prep = imaging.prepare(_resolve_image(image_ref))
+        raw = await client.edit(CFG["outpaint_model"], prompt or "extend the scene", prep.data,
                                 fields={"left": left, "top": top, "right": right,
                                         "bottom": bottom, "seed": _seed(seed)})
-        return _finish(raw, prompt or "outpainted", {"tool": "outpaint_image", "prompt": prompt})
+        return _finish(raw, _caption(prompt, "Extended: ") if prompt else "Extended image",
+                       {"tool": "outpaint_image", "prompt": prompt},
+                       note=_transparency_note(prep, False))
     except Exception as e:
         return _err(e)

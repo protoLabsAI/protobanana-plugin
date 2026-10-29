@@ -46,6 +46,15 @@ async def generate(model: str, prompt: str, size: str, *, seed: int | None = Non
                    negative_prompt: str | None = None) -> bytes:
     payload: dict = {"model": model, "prompt": prompt, "size": size, "n": 1,
                      "response_format": "b64_json"}
+    # LiteLLM (1.83) drops the OpenAI-standard `size` before it reaches a
+    # CustomLLM provider like protoBanana — the backend then guesses a size from
+    # aspect words in the prompt ("wide" → 1216x832). Non-standard keys DO pass
+    # through, so the dimensions also ride as width/height (protoBanana#48).
+    try:
+        w, h = (int(v) for v in size.lower().split("x", 1))
+        payload["width"], payload["height"] = w, h
+    except (ValueError, AttributeError):
+        pass
     if seed is not None:
         payload["seed"] = seed
     if negative_prompt:

@@ -1,6 +1,6 @@
 id: protobanana
 name: protoBanana Images
-version: 0.3.0
+version: 0.4.0
 description: >-
   Native image generation and editing via the protoBanana gateway (self-hosted
   ComfyUI workflows behind LiteLLM): text-to-image, instruction edits,
@@ -17,12 +17,14 @@ capabilities:
   network: []
   filesystem: scoped   # reads back prior results from the core media store; writes only via registry.save_media
 
-# OPTIONAL: Pillow shrinks oversized person refs under the gateway's 1MB
-# form-part cap (imported lazily, only when a two-ref person image is too
-# big; the tool returns a readable error without it). Not declared in
-# requires_pip because the frozen desktop runtime refuses plugins with
-# non-bundled pip deps (protoAgent#1631) — on server installs, add it with:
-#   uv pip install pillow   (or pip install pillow in the agent's venv)
+# Pillow (not declared in requires_pip — the frozen desktop runtime refuses
+# plugins with non-bundled pip deps, protoAgent#1631). It is a hard dependency
+# of protoAgent core since v0.190.0 and bundled in the desktop app, and the
+# plugin imports it lazily: it flattens transparent inputs onto white before an
+# edit (ComfyUI's LoadImage drops alpha → black), restores the transparency /
+# input size afterwards, de-fringes remove_background cutouts, and shrinks
+# oversized two-ref person refs under the gateway's 1MB form-part cap. On an
+# older host without it, those steps are skipped (the tools still work).
 
 config_section: protobanana
 config:

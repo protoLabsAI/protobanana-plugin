@@ -23,8 +23,8 @@ capabilities:
 # built Vite app is committed under view/dist/ so git installs need no Node.
 views:
   - id: studio
-    label: Studio
-    icon: Wand2
+    label: Images
+    icon: Images
     placement: rail
     path: /plugins/protobanana/studio
 

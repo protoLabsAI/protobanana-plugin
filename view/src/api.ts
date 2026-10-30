@@ -119,6 +119,8 @@ export function applyTheme(theme?: string): void {
 }
 
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  // Early history loads can race the kit import/handshake and take the wrong fallback.
+  await ready();
   const p = path.replace(/^\/+/, "");
   if (_kit.apiFetch) return _kit.apiFetch(p, init);
   // Standalone fallback: relative path so it still rides any slug prefix the

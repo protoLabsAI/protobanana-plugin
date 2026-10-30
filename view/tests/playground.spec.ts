@@ -749,6 +749,47 @@ for (const theme of ["light", "dark"]) {
     expect(dims).toMatchObject({ width: 640, height: 480, center: 0, corner: 255 });
   });
 
+  for (const verb of ["Edit", "Region", "Outpaint"]) {
+    test(`${theme}: switching Inpaint through ${verb} requires a fresh visible mask`, async ({ page }) => {
+      const requests = await setup(page, theme);
+      await pickTile(page, 0);
+      const inpaint = bar(page).getByRole("button", { name: "Inpaint", exact: true });
+      const submit = page.getByRole("button", { name: "Apply edit", exact: true });
+      const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+      await inpaint.click();
+      await prompt(page).fill("a bunch of daisies");
+      await expect(canvas).toBeVisible();
+      await canvas.click({ position: { x: 30, y: 30 } });
+      await expect(submit).toBeEnabled();
+      // Re-selecting the active verb keeps the mounted painter and its mask.
+      await inpaint.click();
+      await expect(submit).toBeEnabled();
+      await bar(page).getByRole("button", { name: verb, exact: true }).click();
+      if (verb === "Outpaint") await page.getByLabel("Right", { exact: true }).fill("64");
+      await inpaint.click();
+      await expect(canvas).toBeVisible();
+      await expect(submit).toBeDisabled();
+      await prompt(page).press("Control+Enter");
+      expect(requests).toHaveLength(0);
+      await canvas.click({ position: { x: 150, y: 112 } });
+      await submit.click();
+      await expect.poll(() => requests.length).toBe(1);
+      expect(requests[0]).toMatchObject({ op: "inpaint", parent_id: "root", params: { image: "root" } });
+      const pixels = await page.evaluate(async (src) => {
+        const img = new Image(); img.src = src; await img.decode();
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+        return { old: ctx.getImageData(64, 64, 1, 1).data[3], fresh: ctx.getImageData(320, 239, 1, 1).data[3] };
+      }, requests[0].params.mask as string);
+      expect(pixels).toEqual({ old: 255, fresh: 0 });
+      if (verb === "Outpaint") {
+        await bar(page).getByRole("button", { name: "Outpaint", exact: true }).click();
+        await expect(page.getByLabel("Right", { exact: true })).toHaveValue("0");
+        await expect(submit).toBeDisabled();
+      }
+    });
+  }
+
   test(`${theme}: Outpaint margins are editable numbers and match the handle drag`, async ({ page }) => {
     const requests = await setup(page, theme);
     await pickTile(page, 0);

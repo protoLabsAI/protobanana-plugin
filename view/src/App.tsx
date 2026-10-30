@@ -297,6 +297,14 @@ export function App() {
     setMargins(ZERO_MARGINS);
   }, []);
 
+  const selectMode = useCallback((next: EditMode) => {
+    if (next === mode) return;
+    // Leaving via another verb must reset the canvas data just like Esc/×.
+    // Otherwise a remounted painter can submit a mask it no longer displays.
+    leaveMode();
+    setMode(next);
+  }, [mode, leaveMode]);
+
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [phases, setPhases] = useState<Record<number, { phase: Phase; jobId: string | null }>>({});
   const [callouts, setCallouts] = useState<{ item: QueueItem; phase: Extract<Phase, { kind: "failed" }>; jobId: string | null }[]>([]);
@@ -695,7 +703,7 @@ export function App() {
               imageUrl={current}
               mode={mode}
               narrow={narrow}
-              onSetMode={setMode}
+              onSetMode={selectMode}
               onSubmit={submit}
               onFocusComposer={() => setFocusSignal(s => s + 1)}
             />

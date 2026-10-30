@@ -309,6 +309,40 @@ def test_workflows_hash_invalidates_the_cache(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_step_cache_is_bounded_lru(tmp_path, monkeypatch):
+    """The step cache carries full output bytes, so it must not grow without
+    bound: like the _runs ring it is capped at _MAX_CACHE and evicts the
+    least-recently-used entries. Drive more distinct steps than the cap and the
+    cache stays at the cap — the oldest were evicted, the newest still hit."""
+    mod, _ = _load(tmp_path)
+    gen, _edit = _chain_stubs(mod, monkeypatch)
+    monkeypatch.setattr(mod.pipelines, "_MAX_CACHE", 3)
+
+    single = {"id": "one",
+              "inputs": {"p": {"type": "text", "default": "x"}},
+              "steps": [{"id": "a", "op": "generate",
+                         "params": {"prompt": "{{inputs.p}}", "size": "16x16"}}],
+              "output": "a"}
+
+    async def scenario():
+        # Six distinct prompts → six distinct cache keys, one step each.
+        for i in range(6):
+            await _run_task(mod, mod.pipelines.start_run(single, {"p": f"c{i}"}))
+        assert len(gen) == 6
+        # Twice as many steps ran as the cap allows, yet the cache never exceeds it.
+        assert len(mod.pipelines._cache) == 3
+
+        # The most-recent prompt is still cached (its step is not re-dispatched);
+        # the oldest was evicted (re-running it recomputes).
+        await _run_task(mod, mod.pipelines.start_run(single, {"p": "c5"}))
+        assert len(gen) == 6           # c5 served from cache, generate not called
+        await _run_task(mod, mod.pipelines.start_run(single, {"p": "c0"}))
+        assert len(gen) == 7           # c0 was evicted → recomputed
+        assert len(mod.pipelines._cache) == 3
+
+    asyncio.run(scenario())
+
+
 # ================================================ r5: 524 recoverable + resume
 
 def test_524_marks_only_that_node_recoverable_then_resumes(tmp_path, monkeypatch):

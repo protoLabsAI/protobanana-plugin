@@ -64,6 +64,12 @@ from . import catalog, history, jobs
 log = logging.getLogger(__name__)
 
 _MAX_RUNS = 200
+# The step cache holds the full output bytes of every computed step, so — like
+# the _runs ring — it is bounded: once it is over this many entries, the
+# least-recently-used ones are evicted. Comfortably larger than any one
+# pipeline's step count, so a re-run still hits every unchanged step, but a fixed
+# ceiling means the cache can't grow for the life of the agent process.
+_MAX_CACHE = 256
 
 _registry = None
 _cfg: dict = {}
@@ -76,8 +82,10 @@ _bundled_dir: Path | None = None
 _runs: "OrderedDict[str, dict]" = OrderedDict()
 
 # The step cache: cache key -> {"media_id", "bytes"}. Module-global so a re-run
-# of the same (or an edited) pipeline reuses unchanged steps across runs.
-_cache: dict[str, dict] = {}
+# of the same (or an edited) pipeline reuses unchanged steps across runs. An
+# LRU OrderedDict capped at _MAX_CACHE (see _cache_put): it carries raw bytes, so
+# it is bounded the same way _runs is, rather than growing without limit.
+_cache: "OrderedDict[str, dict]" = OrderedDict()
 
 
 # ---------------------------------------------------------------- port types
@@ -629,6 +637,25 @@ def reset_cache() -> None:
     _cache.clear()
 
 
+def _cache_get(key: str) -> dict | None:
+    """Look a step up in the cache, marking a hit most-recently-used (LRU)."""
+    hit = _cache.get(key)
+    if hit is not None:
+        _cache.move_to_end(key)
+    return hit
+
+
+def _cache_put(key: str, entry: dict) -> None:
+    """Store a computed step and bound the cache (LRU). The cache holds full
+    output bytes, so — like the ``_runs`` ring — it is capped at :data:`_MAX_CACHE`
+    and evicts the least-recently-used entries; without this it would grow for the
+    life of the agent process."""
+    _cache[key] = entry
+    _cache.move_to_end(key)
+    while len(_cache) > _MAX_CACHE:
+        _cache.popitem(last=False)
+
+
 # ----------------------------------------------------------------- the runner
 
 def start_run(name_or_spec, inputs: dict | None = None, *, operator: str = "default",
@@ -779,7 +806,7 @@ async def _execute(run_id: str) -> None:
             scalar, ref_bytes = _prepare_step(step, op, input_values, run["_bytes"])
             key = _cache_key(op, alias, scalar, ref_bytes, workflows_hash)
             node["_key"] = key
-            hit = _cache.get(key)
+            hit = _cache_get(key)
             if hit is not None:
                 run["_bytes"][sid] = hit["bytes"]
                 node.update(status="cached", cached=True, media_id=hit["media_id"],
@@ -817,7 +844,7 @@ async def _execute(run_id: str) -> None:
             return
         # Cache + history + node.done only after the output is safely saved.
         run["_bytes"][sid] = raw
-        _cache[key] = {"media_id": ref.id, "url": getattr(ref, "url", None), "bytes": raw}
+        _cache_put(key, {"media_id": ref.id, "url": getattr(ref, "url", None), "bytes": raw})
         node.update(status="done", media_id=ref.id, url=getattr(ref, "url", None),
                     cached=False, elapsed_s=round(time.monotonic() - node_started, 2))
         history.record_pipeline(ref.id, run_id=run_id, pipeline=run["pipeline"], step=sid,

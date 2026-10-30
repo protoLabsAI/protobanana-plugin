@@ -7,3 +7,4 @@ httpx>=0.27
 pillow>=10.3
 langchain-core>=0.3
 langchain>=1.0   # attachment-bridge middleware (langchain.agents.middleware)
+fastapi>=0.115   # Studio router (core provides it at runtime; tests exercise the routes via httpx ASGI)

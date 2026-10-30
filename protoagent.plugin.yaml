@@ -17,6 +17,28 @@ capabilities:
   network: []
   filesystem: scoped   # reads back prior results from the core media store; writes only via registry.save_media
 
+# protoBanana Studio — a console view (ADR 0026/0038): the page is public, the
+# data routes are gated. The plugin serves both from its FastAPI router; the
+# built Vite app is committed under view/dist/ so git installs need no Node.
+views:
+  - id: studio
+    label: Studio
+    icon: Wand2
+    placement: rail
+    path: /plugins/protobanana/studio
+
+# The public page prefix (page + its built assets). Everything under
+# /api/plugins/protobanana stays gated by default (ADR 0026 D1/D5).
+public_paths:
+  - /plugins/protobanana/studio
+
+# Completion events for the Studio view (and other consumers) on the core event
+# bus (ADR 0039). Renders submitted from the view are jobs; the view subscribes
+# through the plugin kit, keeping it off the 20 s fleet read lane.
+emits:
+  - protobanana.job.done
+  - protobanana.job.failed
+
 # Pillow (not declared in requires_pip — the frozen desktop runtime refuses
 # plugins with non-bundled pip deps, protoAgent#1631). It is a hard dependency
 # of protoAgent core since v0.190.0 and bundled in the desktop app, and the
@@ -41,6 +63,8 @@ config:
   default_size: 1024x1024
   timeout_s: 300
   show_model: true     # attach results via multimodal_tool_result (#1930) so a vision model sees them
+  studio_retry_on_524: false   # off by default: a 524 means the ComfyUI job is still running, so an auto-retry would stack a second GPU job (protoBanana#52)
+  studio_retry_backoff_s: 2    # seconds to wait before the single retry (only when studio_retry_on_524 is true)
 
 settings:
   - { key: gen_model, label: "Text-to-image model", type: string, description: "Gateway alias for /images/generations (must exist in the gateway's model_list)." }
@@ -53,3 +77,4 @@ settings:
   - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
   - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }
   - { key: show_model, label: "Show results to the model", type: bool, description: "Attach generated images to the tool result so a vision model can critique its own output (capped at 2 MiB/image by core)." }
+  - { key: studio_retry_on_524, label: "Studio: retry once on gateway timeout", type: bool, description: "When a Studio render returns HTTP 524 (the gateway's ~100s Cloudflare cap), retry it once after a backoff. Off by default: the original ComfyUI job keeps running, so a retry stacks a second GPU job (protoBanana#52)." }

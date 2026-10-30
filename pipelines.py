@@ -54,6 +54,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -129,6 +130,7 @@ SPEC_SCHEMA: dict = {
         "id": {"type": "string", "pattern": r"^[a-z0-9][a-z0-9_-]*$"},
         "name": {"type": "string"},
         "description": {"type": "string"},
+        "expose_as_tool": {"type": "boolean"},
         "inputs": {
             "type": "object",
             "additionalProperties": {
@@ -503,6 +505,37 @@ def _load_text_spec(text: str) -> dict:
     return data
 
 
+def _shipped_pipelines():
+    """Read other plugins' specs using the host's canonical roots and manifests.
+
+    No host imports at module scope, and no guessed filesystem locations when
+    running without the host. Discovery re-runs so installs/removals take effect.
+    """
+    try:
+        from graph.plugins.installer import loader_roots
+        from graph.plugins.loader import discover_plugins
+    except ImportError:
+        return
+    try:
+        manifests = discover_plugins(loader_roots())
+        for manifest in manifests:
+            if manifest.id == "protobanana":
+                continue
+            base = Path(manifest.path) / "pipelines"
+            if not base.is_dir():
+                continue
+            for path in sorted(base.iterdir()):
+                if path.suffix.lower() not in (".yaml", ".yml", ".json") or not path.is_file():
+                    continue
+                try:
+                    spec = validate(_load_text_spec(path.read_text(encoding="utf-8")))
+                    yield manifest.id, spec
+                except Exception:
+                    log.exception("[protobanana] could not load shipped pipeline %s", path)
+    except Exception:
+        log.exception("[protobanana] could not discover shipped pipelines")
+
+
 def _candidate_files(name: str) -> list[Path]:
     """The files a pipeline ``name`` could live in — saved first (it shadows a
     starter of the same id), then bundled; ``.yaml`` / ``.yml`` / ``.json``."""
@@ -529,6 +562,9 @@ def load_pipeline(name: str) -> dict:
             raise
         except Exception as exc:  # noqa: BLE001 - a bad read falls through to "not found"
             log.warning("[protobanana] could not read pipeline %s: %s", path, exc)
+    for source, spec in _shipped_pipelines():
+        if spec["id"] == name:
+            return spec
     raise SpecError(f"no pipeline named {name!r}")
 
 
@@ -537,6 +573,17 @@ def list_pipelines() -> list[dict]:
     the data dir — as ``{id, name, description, source, inputs, steps}`` summaries.
     A saved pipeline shadows a bundled starter with the same id. Never raises."""
     found: "OrderedDict[str, dict]" = OrderedDict()
+    for source, spec in _shipped_pipelines():
+        pid = spec["id"]
+        if pid not in found:
+            found[pid] = {
+                "id": pid, "name": spec.get("name") or pid,
+                "description": spec.get("description", ""),
+                "source": source, "read_only": True,
+                "inputs": spec.get("inputs") or {},
+                "steps": [s["id"] for s in spec["steps"]],
+                "expose_as_tool": spec.get("expose_as_tool", False),
+            }
     for source, base in (("bundled", _bundled_dir), ("saved", _saved_dir)):
         if base is None or not base.is_dir():
             continue
@@ -557,6 +604,8 @@ def list_pipelines() -> list[dict]:
                 "name": spec.get("name") or pid,
                 "description": spec.get("description", ""),
                 "source": source,  # "saved" overwrites "bundled" (listed last)
+                "read_only": False,
+                "expose_as_tool": spec.get("expose_as_tool", False),
                 "inputs": spec.get("inputs") or {},
                 "steps": [s.get("id") for s in (spec.get("steps") or [])],
             }
@@ -571,6 +620,8 @@ def save_pipeline(spec) -> dict:
         spec = _load_text_spec(spec)
     validate(spec)
     pid = spec["id"]
+    if any(shipped["id"] == pid for _, shipped in _shipped_pipelines()):
+        raise SpecError(f"pipeline {pid!r} is read-only; duplicate it with a new id to edit")
     if _saved_dir is None:
         raise SpecError("the plugin data dir is not configured, so a pipeline cannot be saved")
     try:
@@ -580,8 +631,61 @@ def save_pipeline(spec) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise SpecError(f"could not save pipeline {pid!r}: {exc}")
     # Announce the save so a live Studio view can refresh (design §4).
-    _publish("protobanana.pipeline.saved", {"id": pid})
+    _publish("protobanana.pipeline.saved",
+             {"id": pid, "pipeline_id": pid, "source": "saved"})
     return {"id": pid, "source": "saved"}
+
+
+def _pipeline_tool(spec):
+    from langchain_core.tools import StructuredTool
+    from pydantic import Field, create_model
+
+    name = "pipeline_" + re.sub(r"[^a-z0-9_]", "_", spec["id"].lower())
+    fields = {}
+    for key, decl in spec.get("inputs", {}).items():
+        kind = _input_type(decl)
+        default = decl.get("default", ...) if isinstance(decl, dict) else ...
+        description = decl.get("description", "") if isinstance(decl, dict) else ""
+        fields[key] = (int if kind in ("int", "seed") else str,
+                       Field(default=default, description=description))
+
+    async def invoke(**inputs):
+        try:
+            from .tools import run_pipeline
+
+            return await run_pipeline.ainvoke({"name": spec["id"], "inputs": inputs})
+        except Exception as exc:
+            log.exception("[protobanana] pipeline tool %s failed", name)
+            return f"Error: {exc}"
+
+    return StructuredTool(
+        name=name, description=spec.get("description", ""),
+        args_schema=create_model(name + "_inputs", **fields), coroutine=invoke,
+        handle_validation_error=lambda exc: f"Error: invalid pipeline inputs: {exc}",
+    )
+
+
+def pipeline_tool_factory(all_tools, config):
+    """Build a fresh set of opted-in pipeline tools at every graph build."""
+    result = []
+    try:
+        names = {tool.name for tool in all_tools}
+        for summary in list_pipelines():
+            try:
+                spec = load_pipeline(summary["id"])
+                if spec.get("expose_as_tool") is not True:
+                    continue
+                tool = _pipeline_tool(spec)
+                if tool.name in names:
+                    log.warning("[protobanana] skipping colliding pipeline tool %s", tool.name)
+                    continue
+                names.add(tool.name)
+                result.append(tool)
+            except Exception:
+                log.exception("[protobanana] could not build pipeline tool %s", summary.get("id"))
+    except Exception:
+        log.exception("[protobanana] pipeline tool factory failed")
+    return result
 
 
 # ------------------------------------------------------------- run accounting
@@ -1021,6 +1125,9 @@ def _data_url(raw: bytes) -> str:
 def _publish(topic: str, data: dict) -> None:
     """Announce on the core event bus via the registry (ADR 0039). A background
     task must not die on a bad bus call, so failures are logged."""
+    if topic == "protobanana.pipeline.run.done":
+        data = {**data, "pipeline_id": data["pipeline"],
+                "output_media_ids": [data["output_media_id"]] if data.get("output_media_id") else []}
     try:
         if _registry is not None:
             _registry.emit(topic, data)

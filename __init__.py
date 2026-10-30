@@ -35,6 +35,7 @@ def register(registry) -> None:
     # S7 pipelines: the DAG runner reuses the same jobs/client path + save_media +
     # history + the event bus. Configured before the router/tools run it.
     pipelines.configure(registry)
+    registry.register_late_tool_factory(pipelines.pipeline_tool_factory)
     # Ship the pipelines skill so the agent knows when to reach for run_pipeline
     # (guarded: older hosts without the seam just don't get the skill).
     if hasattr(registry, "register_skill_dir"):

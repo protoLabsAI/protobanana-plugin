@@ -505,11 +505,60 @@ def _load_text_spec(text: str) -> dict:
     return data
 
 
+def _enabled_plugin_ids(manifests) -> set[str]:
+    """The ids among ``manifests`` the host would actually load — the enable gate
+    ``loader.load_plugins`` applies, re-applied here because ``discover_plugins``
+    returns every installed manifest regardless of enable state (the gate lives in
+    the loader, not in discovery).
+
+    A plugin is on when it is a ``builtin``, or when (its manifest opts in with
+    ``enabled: true``, OR the operator's ``plugins.enabled`` lists it, OR an
+    enabled bundled plugin ``enables`` it) AND ``plugins.disabled`` doesn't list
+    it — the one rule every "is this plugin on?" site uses. The live config and
+    the shared implied-enables resolver are read lazily; if either is unavailable
+    (host-free, or pre-boot) we fall back to the author opt-in (``enabled: true``)
+    alone, which never over-includes a disabled plugin."""
+    enabled_ids: set[str] = set()
+    disabled_ids: set[str] = set()
+    try:
+        from graph import sdk
+
+        cfg = sdk.config()
+        enabled_ids = set(getattr(cfg, "plugins_enabled", None) or ())
+        disabled_ids = set(getattr(cfg, "plugins_disabled", None) or ())
+    except Exception:  # noqa: BLE001 - no live config → author opt-in only
+        pass
+    implied: dict = {}
+    try:
+        from graph.plugins.installer import bundled_plugins_dir
+        from graph.plugins.manifest import implied_enabled
+
+        implied = implied_enabled(manifests, enabled_ids, disabled_ids,
+                                  bundled_dir=bundled_plugins_dir())
+    except Exception:  # noqa: BLE001 - resolver unavailable → no implied enables
+        pass
+    on: set[str] = set()
+    for m in manifests:
+        mid = getattr(m, "id", None)
+        if mid is None:
+            continue
+        if getattr(m, "builtin", False) or (
+            (getattr(m, "enabled", False) or mid in enabled_ids or mid in implied)
+            and mid not in disabled_ids
+        ):
+            on.add(mid)
+    return on
+
+
 def _shipped_pipelines():
-    """Read other plugins' specs using the host's canonical roots and manifests.
+    """Read specs shipped by other **enabled** plugins, using the host's canonical
+    roots and manifests.
 
     No host imports at module scope, and no guessed filesystem locations when
     running without the host. Discovery re-runs so installs/removals take effect.
+    ``discover_plugins`` lists every installed manifest, enabled or not, so the
+    enable gate is applied here (:func:`_enabled_plugin_ids`): a plugin the host
+    would not load must not have its pipelines listed, run, or exposed as tools.
     """
     try:
         from graph.plugins.installer import loader_roots
@@ -517,9 +566,10 @@ def _shipped_pipelines():
     except ImportError:
         return
     try:
-        manifests = discover_plugins(loader_roots())
+        manifests = list(discover_plugins(loader_roots()))
+        enabled = _enabled_plugin_ids(manifests)
         for manifest in manifests:
-            if manifest.id == "protobanana":
+            if manifest.id == "protobanana" or manifest.id not in enabled:
                 continue
             base = Path(manifest.path) / "pipelines"
             if not base.is_dir():
@@ -569,9 +619,15 @@ def load_pipeline(name: str) -> dict:
 
 
 def list_pipelines() -> list[dict]:
-    """Every pipeline known to the plugin — the shipped starters plus any saved in
-    the data dir — as ``{id, name, description, source, inputs, steps}`` summaries.
-    A saved pipeline shadows a bundled starter with the same id. Never raises."""
+    """Every pipeline known to the plugin — those shipped by other enabled plugins,
+    this plugin's own bundled starters, and any saved in the data dir — as
+    ``{id, name, description, source, read_only, expose_as_tool, inputs, steps}``
+    summaries. ``source`` is the owning plugin id for another plugin's pipelines
+    (``read_only`` True) and ``"bundled"`` / ``"saved"`` for this plugin's own
+    (``read_only`` False). Precedence runs other-plugin < bundled < saved: a local
+    bundled starter or a saved spec shadows another plugin's pipeline of the same
+    id and makes it editable again, and a saved pipeline shadows a bundled starter.
+    Never raises."""
     found: "OrderedDict[str, dict]" = OrderedDict()
     for source, spec in _shipped_pipelines():
         pid = spec["id"]
@@ -620,7 +676,15 @@ def save_pipeline(spec) -> dict:
         spec = _load_text_spec(spec)
     validate(spec)
     pid = spec["id"]
-    if any(shipped["id"] == pid for _, shipped in _shipped_pipelines()):
+    # Refuse only when the EFFECTIVE pipeline for this id is one shipped by another
+    # (enabled) plugin — i.e. no local saved spec and no protobanana bundled starter
+    # already shadows it. Both a saved pipeline (what we are about to write) and a
+    # bundled starter take precedence over a plugin's shipped spec in load_pipeline /
+    # list_pipelines (which show the row read_only False), so a colliding id stays
+    # editable; refusing it outright would strand the user's own pipeline the moment
+    # some other plugin ships the same id.
+    if (not any(path.is_file() for path in _candidate_files(pid))
+            and any(shipped["id"] == pid for _, shipped in _shipped_pipelines())):
         raise SpecError(f"pipeline {pid!r} is read-only; duplicate it with a new id to edit")
     if _saved_dir is None:
         raise SpecError("the plugin data dir is not configured, so a pipeline cannot be saved")

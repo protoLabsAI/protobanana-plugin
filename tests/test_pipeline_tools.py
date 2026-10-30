@@ -86,19 +86,25 @@ def test_tool_invokes_runner_and_publishes(tmp_path, monkeypatch):
     assert reg.emitted[-1][1]["output_media_ids"] == []
 
 
-def _ship(monkeypatch, tmp_path, spec):
+def _ship(monkeypatch, tmp_path, spec, *, plugin_id="campaign", enabled=True):
     root = tmp_path / "other-plugin"
     directory = root / "pipelines"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     # The declared id, not the filename, identifies the pipeline.
     (directory / "recipe.yaml").write_text(yaml.safe_dump(spec))
     installer = ModuleType("graph.plugins.installer")
     loader = ModuleType("graph.plugins.loader")
     installer.loader_roots = lambda: [tmp_path]
+    # discover_plugins lists every installed manifest, enabled or not — the enable
+    # gate (manifest.enabled / plugins.enabled / plugins.disabled) is the loader's,
+    # mirrored by _shipped_pipelines. A faithful fake carries the manifest fields
+    # that gate reads: here the author opt-in `enabled` flag.
+    manifest = SimpleNamespace(id=plugin_id, path=root, enabled=enabled,
+                               builtin=False, enables=[])
 
     def discover(roots):
         assert roots == [tmp_path]
-        return [SimpleNamespace(id="campaign", path=root)]
+        return [manifest]
 
     loader.discover_plugins = discover
     monkeypatch.setitem(sys.modules, installer.__name__, installer)
@@ -132,6 +138,53 @@ def test_shipped_pipeline_read_only_in_tools_and_routes(tmp_path, monkeypatch):
     assert mod.pipelines.save_pipeline(duplicate)["source"] == "saved"
     (directory / "recipe.yaml").unlink()
     assert [t.name for t in reg.late_tool_factories[0](reg.tools, {})] == ["pipeline_editable_copy"]
+
+
+def test_disabled_plugin_pipelines_are_not_exposed(tmp_path, monkeypatch):
+    mod, reg = _load(tmp_path / "data")
+    # discover_plugins still returns the manifest, but a plugin that is neither
+    # author-enabled nor operator-enabled is one the host would not load, so none of
+    # its pipelines may be listed, loadable, or exposed as tools.
+    _ship(monkeypatch, tmp_path, SPEC, enabled=False)
+    assert list(mod.pipelines._shipped_pipelines()) == []
+    assert SPEC["id"] not in {p["id"] for p in mod.pipelines.list_pipelines()}
+    with pytest.raises(mod.pipelines.SpecError, match="no pipeline named"):
+        mod.pipelines.load_pipeline(SPEC["id"])
+    assert reg.late_tool_factories[0](reg.tools, {}) == []
+    # And the id is free: nothing shadows it, so the user can save their own there.
+    assert mod.pipelines.save_pipeline(SPEC)["source"] == "saved"
+
+
+def test_saved_pipeline_shadows_a_colliding_shipped_id(tmp_path, monkeypatch):
+    mod, _ = _load(tmp_path / "data")
+    # The user saves their own pipeline first...
+    mine = {**SPEC, "description": "mine"}
+    assert mod.pipelines.save_pipeline(mine)["source"] == "saved"
+    # ...then a plugin is installed that ships the SAME id. The user's live copy must
+    # stay editable — load/list resolve the saved spec, not the plugin's, so a save
+    # edits the user's own pipeline rather than being refused as read-only.
+    _ship(monkeypatch, tmp_path, {**SPEC, "description": "theirs"})
+    row = next(p for p in mod.pipelines.list_pipelines() if p["id"] == SPEC["id"])
+    assert row["source"] == "saved"
+    assert row["read_only"] is False
+    assert mod.pipelines.load_pipeline(SPEC["id"])["description"] == "mine"
+    edited = {**mine, "description": "edited"}
+    assert mod.pipelines.save_pipeline(edited)["source"] == "saved"
+    assert mod.pipelines.load_pipeline(SPEC["id"])["description"] == "edited"
+
+
+def test_bundled_starter_shadows_a_colliding_shipped_id(tmp_path, monkeypatch):
+    mod, _ = _load(tmp_path / "data")
+    # A protobanana bundled starter also takes precedence over another plugin's
+    # shipped spec of the same id, so customising (saving over) that starter is
+    # never refused even once a plugin ships the same id.
+    _ship(monkeypatch, tmp_path, {**SPEC, "id": "product-sticker", "description": "theirs"})
+    row = next(p for p in mod.pipelines.list_pipelines() if p["id"] == "product-sticker")
+    assert row["source"] == "bundled"
+    assert row["read_only"] is False
+    starter = mod.pipelines.load_pipeline("product-sticker")
+    starter["description"] = "my customised starter"
+    assert mod.pipelines.save_pipeline(starter)["source"] == "saved"
 
 
 def test_collisions_and_factory_errors_are_isolated(tmp_path, caplog, monkeypatch):

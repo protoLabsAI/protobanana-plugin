@@ -1276,11 +1276,38 @@ for (const theme of ["light", "dark"]) {
     await pickTile(page, 0);
     await expect(viewBar(page).getByRole("button", { name: "Compare to parent" })).toHaveCount(0);
     await pickTile(page, 1);
+    const compareButton = viewBar(page).getByRole("button", { name: "Compare to parent" });
+    await compareButton.hover();
+    const tooltip = viewBar(page).getByRole("tooltip", { name: "Compare to parent", exact: true });
+    await expect(tooltip).toBeVisible();
+    const tooltipBox = (await tooltip.boundingBox())!;
+    const stageBox = (await page.locator(".stage-viewport").boundingBox())!;
+    expect(tooltipBox.x).toBeGreaterThanOrEqual(stageBox.x);
+    expect(tooltipBox.y).toBeGreaterThanOrEqual(stageBox.y);
+    expect(tooltipBox.x + tooltipBox.width).toBeLessThanOrEqual(stageBox.x + stageBox.width);
+    expect(tooltipBox.y + tooltipBox.height).toBeLessThanOrEqual(stageBox.y + stageBox.height);
+    const buttonBox = (await compareButton.boundingBox())!;
+    expect(tooltipBox.y).toBeGreaterThanOrEqual(buttonBox.y + buttonBox.height);
     await viewBar(page).getByRole("button", { name: "Compare to parent" }).click();
     const slider = page.getByRole("slider", { name: "Parent / result split" });
     await expect(slider).toHaveAttribute("aria-valuenow", "50");
     await slider.focus();
     await slider.press("ArrowRight");
+    // The full-height hit area must not paint a second pair of divider lines.
+    const divider = page.locator(".compare-divider:visible");
+    await expect(divider).toHaveCount(1);
+    const dividerBox = (await divider.boundingBox())!;
+    expect(dividerBox.width).toBeGreaterThan(0);
+    expect(dividerBox.width).toBeLessThanOrEqual(3);
+    const hitBox = (await slider.boundingBox())!;
+    expect(dividerBox.x + dividerBox.width / 2).toBeCloseTo(hitBox.x + hitBox.width / 2);
+    const gripBox = (await slider.locator(".compare-grip").boundingBox())!;
+    expect(dividerBox.x + dividerBox.width / 2).toBeCloseTo(gripBox.x + gripBox.width / 2);
+    expect(await slider.evaluate(el => {
+      const css = getComputedStyle(el);
+      return [css.borderLeftWidth, css.borderRightWidth, css.outlineStyle, css.boxShadow, css.backgroundColor];
+    })).toEqual(["0px", "0px", "none", "none", "rgba(0, 0, 0, 0)"]);
+    await expect(slider.locator(".compare-grip")).toHaveCSS("outline-style", "solid");
     await expect(slider).toHaveAttribute("aria-valuenow", "51");
     await slider.press("Home");
     await expect(slider).toHaveAttribute("aria-valuenow", "0");

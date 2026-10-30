@@ -1427,6 +1427,15 @@ body {
   box-shadow: 0 4px 16px var(--overlay);
 }
 
+/* Keep toolbar bubbles below the controls and inside the stage's right edge. */
+.view-toolbar .pbx-tooltip {
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
 .view-zoom-pct {
   min-width: 46px;
   padding: 5px 6px;
@@ -1587,9 +1596,10 @@ fieldset {
 .lineage .pbx-popover-panel { max-width: min(420px, 80vw); overflow-x: auto; }
 .compare, .compare-parent { position: absolute; inset: 0; }
 .compare-parent { pointer-events: none; }
-.compare-handle { position: absolute; top: 0; bottom: 0; width: 20px; transform: translateX(-50%); cursor: ew-resize; touch-action: none; display: grid; place-items: center; }
-.compare-handle::before { content: ""; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); }
-.compare-handle span { z-index: 1; background: var(--bg-raised); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); }
+.compare-handle { position: absolute; top: 0; bottom: 0; width: 20px; transform: translateX(-50%); cursor: ew-resize; touch-action: none; display: grid; place-items: center; background: transparent; border: 0; outline: none; box-shadow: none; }
+.compare-divider { position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; background: var(--accent); }
+.compare-grip { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; background: var(--bg-raised); color: var(--fg); border: 1px solid var(--border); border-radius: 50%; }
+.compare-handle:focus-visible .compare-grip { outline: 2px solid var(--focus); outline-offset: 1px; }
 .image-info { max-width: min(320px, 70vw); max-height: 200px; overflow: auto; overflow-wrap: anywhere; }
 .image-info dd { margin: 0 0 8px; }
 .image-info pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

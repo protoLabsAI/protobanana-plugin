@@ -21,6 +21,6 @@ export function Compare({ parent, children }: { parent: ReactNode; children: Rea
         if (delta || e.key === "Home" || e.key === "End") {
           e.preventDefault(); setSplit(v => e.key === "Home" ? 0 : e.key === "End" ? 100 : Math.max(0, Math.min(100, v + delta * (e.shiftKey ? 10 : 1))));
         }
-      }}><span aria-hidden="true">↔</span></div>
+      }}><span className="compare-divider" aria-hidden="true" /><span className="compare-grip" aria-hidden="true">↔</span></div>
   </div>;
 }

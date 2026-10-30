@@ -1,24 +1,26 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
-export function Compare({ current, parent }: { current?: string; parent?: string }) {
+/** The split lives in viewport coordinates, independently of image zoom/pan. */
+export function Compare({ parent, children }: { parent: ReactNode; children: ReactNode }) {
   const [split, setSplit] = useState(50);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const drag = useRef<{ x: number; y: number }>();
-  return <section aria-label="Image comparison">
-    <div className="compare-toolbar">
-      <label>Zoom <input aria-label="Zoom" type="range" min="1" max="5" step="0.1" value={zoom} onChange={e => setZoom(Number(e.target.value))} /></label>
-      <button type="button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); setSplit(50); }}>Reset view</button>
-    </div>
-    <div className="compare-viewport" onPointerDown={e => {
-      drag.current = { x: e.clientX - pan.x, y: e.clientY - pan.y }; e.currentTarget.setPointerCapture(e.pointerId);
-    }} onPointerMove={e => { if (drag.current) setPan({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y }); }}
-      onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
-      {current ? <div className="compare-images" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-        <img src={current} alt="Current result" draggable={false} />
-        {parent && <img className="compare-parent" src={parent} alt="Parent image" draggable={false} style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }} />}
-      </div> : <p className="placeholder">Choose an operation or select a history image to begin.</p>}
-    </div>
-    {parent && <label className="field">Parent / result<input aria-label="A/B comparison" type="range" min="0" max="100" value={split} onChange={e => setSplit(Number(e.target.value))} /></label>}
-  </section>;
+  const root = useRef<HTMLDivElement>(null);
+  const move = (x: number) => {
+    const box = root.current!.getBoundingClientRect();
+    setSplit(Math.round(Math.max(0, Math.min(100, (x - box.left) / box.width * 100))));
+  };
+  return <div className="compare" ref={root}>
+    {children}
+    <div className="compare-parent" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>{parent}</div>
+    <div className="compare-handle" role="slider" tabIndex={0} aria-label="Parent / result split" aria-valuemin={0} aria-valuemax={100} aria-valuenow={split}
+      style={{ left: `${split}%` }} onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); move(e.clientX); }}
+      onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) move(e.clientX); }}
+      onPointerUp={e => e.currentTarget.releasePointerCapture(e.pointerId)}
+      onDoubleClick={e => e.stopPropagation()} onKeyDown={e => {
+        e.stopPropagation();
+        const delta = e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : 0;
+        if (delta || e.key === "Home" || e.key === "End") {
+          e.preventDefault(); setSplit(v => e.key === "Home" ? 0 : e.key === "End" ? 100 : Math.max(0, Math.min(100, v + delta * (e.shiftKey ? 10 : 1))));
+        }
+      }}><span className="compare-divider" aria-hidden="true" /><span className="compare-grip" aria-hidden="true">↔</span></div>
+  </div>;
 }

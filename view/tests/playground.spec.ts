@@ -116,7 +116,7 @@ for (const theme of ["light", "dark"]) {
   test(`${theme}: generating from an expired History selection starts a new root`, async ({ page }) => {
     const expired = { ...records[0], pruned: true };
     const requests = await setup(page, theme, "pending", catalog, [expired]);
-    await page.getByRole("button", { name: /Pruned .* render/ }).click();
+    await page.getByRole("option", { name: /Pruned .* render/ }).click();
     await expect(page.getByText("This image expired", { exact: true })).toBeVisible();
     await expect(page.getByText("star images to keep them", { exact: true })).toBeVisible();
     await expect(page.getByAltText("Current image")).toHaveCount(0);
@@ -149,7 +149,7 @@ for (const theme of ["light", "dark"]) {
       await expect(badge).toHaveText(`Non-commercial · ${note || "RMBG CC BY-NC"}`);
       await expect(badge).toBeVisible();
       // Selecting an image changes the active entry to the unrestricted editor.
-      await page.locator(".g-tile").first().getByRole("button", { name: /render/ }).click();
+      await page.locator(".g-tile").first().getByRole("option", { name: /render/ }).click();
       await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
       await expect(badge).toHaveCount(0);
       await page.getByRole("button", { name: "+ New", exact: true }).click();
@@ -432,7 +432,7 @@ for (const theme of ["light", "dark"]) {
 
     // Navigating the canvas must not discard unresolved job failures.
     await page.getByRole("button", { name: "+ New", exact: true }).click();
-    await page.locator(".g-tile").first().getByRole("button", { name: /render/ }).click();
+    await page.locator(".g-tile").first().getByRole("option", { name: /render/ }).click();
     await expect(first).toBeVisible();
     await expect(second).toBeVisible();
 
@@ -493,7 +493,7 @@ test("History filter narrows by op, source and starred", async ({ page }) => {
 
 test("selecting a History thumb makes it the current image; pruned shows the expired Empty", async ({ page }) => {
   await setup(page);
-  await page.locator(".g-tile").first().getByRole("button", { name: /render/ }).click();
+  await page.locator(".g-tile").first().getByRole("option", { name: /render/ }).click();
   await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
   await expect(page.getByAltText("Current image")).toBeVisible();
 });
@@ -588,9 +588,9 @@ test("S5: a focus inbox message selects that image; unknown and spoofed ids are 
   })));
   await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
 
-  // An unknown id surfaces an alert and leaves no current image.
+  // An unknown id surfaces a polite status and leaves no current image.
   await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "older-image" }, location.origin));
-  await expect(page.getByRole("alert")).toContainText("Image older-image is not in Studio history");
+  await expect(page.locator(".focus-error[role=status]")).toContainText("Image older-image is not in Studio history");
   await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
 });
 
@@ -663,7 +663,7 @@ test("S6: the gateway alias the composer resolves is pinned on submission", asyn
 
 // Select a History thumb so it becomes the current image (the action bar shows).
 const pickTile = (page: Page, index: number) =>
-  page.locator(".g-tile").nth(index).getByRole("button", { name: /render/ }).click();
+  page.locator(".g-tile").nth(index).getByRole("option", { name: /render/ }).click();
 const bar = (page: Page) => page.getByRole("toolbar", { name: "Image actions", exact: true });
 
 for (const theme of ["light", "dark"]) {
@@ -1184,8 +1184,8 @@ for (const theme of ["light", "dark"]) {
     const tiles = page.locator(".g-tile");
     await expect(tiles).toHaveCount(3);
     for (let i = 0; i < 3; i++) {
-      await expect(tiles.nth(i).getByRole("button")).toHaveCount(1);
-      await expect(tiles.nth(i).getByRole("button")).toHaveAccessibleName(/render, 2 min ago/);
+      await expect(tiles.nth(i).getByRole("option")).toHaveCount(1);
+      await expect(tiles.nth(i).getByRole("option")).toHaveAccessibleName(/render, 2 min ago/);
       await expect(tiles.nth(i).locator(".g-agent")).toHaveText("agent");
     }
     const positions = await tiles.evaluateAll(els => els.map(el => {
@@ -1194,11 +1194,165 @@ for (const theme of ["light", "dark"]) {
     }));
     expect(positions.every(pos => pos.y === positions[0].y)).toBe(true);
     expect(new Set(positions.map(pos => pos.x)).size).toBe(3);
-    await tiles.first().getByRole("button").focus();
+    await tiles.first().getByRole("option").focus();
     await expect(tiles.first().getByRole("tooltip")).toHaveText(/render, 2 min ago/);
     await page.keyboard.press("Enter");
-    await expect(tiles.first().getByRole("button")).toHaveAttribute("aria-current", "true");
+    await expect(tiles.first().getByRole("option")).toHaveAttribute("aria-current", "true");
     await expect(bar(page).getByRole("button", { name: "Star", exact: true })).toBeVisible();
     await expect(bar(page).getByRole("button", { name: "Send to agent", exact: true })).toBeVisible();
+  });
+}
+
+// A forest: two independent root generations plus a real fork under the first
+// root. A root has NO parent, so selecting it must not fork into the unrelated
+// second root; only the shared-parent children count as variants. (Regression
+// guard: `parent_id === null` used to make every root a sibling of every root.)
+const forest: HistoryRecord[] = [
+  { media_id: "root-a", parent_id: null, op: "generate", alias: "protolabs/qwen-image", params: { prompt: "A ceramic vase", seed: 1 }, source: "studio", job_id: null, created: 5, starred: false, pruned: false },
+  { media_id: "root-b", parent_id: null, op: "generate", alias: "protolabs/qwen-image", params: { prompt: "A glass bottle", seed: 2 }, source: "studio", job_id: null, created: 4, starred: false, pruned: false },
+  { media_id: "child-a1", parent_id: "root-a", op: "edit", alias: "protolabs/qwen-image", params: { prompt: "make it bluer", seed: 3, image: "root-a" }, source: "studio", job_id: null, created: 3, starred: false, pruned: false },
+  { media_id: "child-a2", parent_id: "root-a", op: "edit", alias: "protolabs/qwen-image", params: { prompt: "make it greener", seed: 4, image: "root-a" }, source: "studio", job_id: null, created: 2, starred: false, pruned: false },
+];
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: lineage follows ancestors and a new branch selects its sibling`, async ({ page }) => {
+    const history = records.map(r => ({ ...r }));
+    history[2].op = "region";
+    const requests = await setup(page, theme, "pending", catalog, history);
+    await expect(page.getByRole("listbox", { name: "Image lineage" })).toHaveCount(0);
+    await pickTile(page, 2);
+    const strip = page.getByRole("listbox", { name: "Image lineage" });
+    await expect(strip.getByRole("option")).toHaveCount(3);
+    expect(await strip.getByRole("option").evaluateAll(els => els.map(el => el.getAttribute("aria-label")?.split(",")[0]))).toEqual(["Generate", "Edit", "Region edit"]);
+    await strip.getByRole("option").nth(0).click();
+    await prompt(page).fill("a blue vase");
+    const tracking = page.waitForRequest(r => r.url().endsWith("/jobs/job-1"));
+    await prompt(page).press("Control+Enter");
+    await tracking;
+    await expect(strip.getByRole("option", { name: "Rendering image" })).toBeVisible();
+    expect(requests[0].parent_id).toBe("root");
+    history.push({ ...records[1], media_id: "sibling", params: { prompt: "a blue vase" } });
+    await busDone(page, { job_id: "job-1", media_id: "sibling" });
+    await expect(prompt(page)).toBeFocused();
+    await expect(strip.getByRole("option", { name: "Rendering image" })).toHaveCount(0);
+    await page.getByRole("button", { name: "⑂ 2 variants" }).click();
+    const variants = page.getByRole("listbox", { name: "Variants", exact: true });
+    await expect(variants.getByRole("option")).toHaveCount(2);
+    await variants.getByRole("option").first().click();
+    await expect(page.locator(".g-thumb").nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(strip.getByRole("option")).toHaveCount(2);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test(`${theme}: a root has no variants; only a real shared-parent fork forks`, async ({ page }) => {
+    await setup(page, theme, "pending", catalog, forest);
+    const strip = page.getByRole("listbox", { name: "Image lineage" });
+    const forks = page.getByRole("button", { name: /variants/ });
+
+    // Focus the root directly (the shared index resolves it). A root has no
+    // parent, so it must show NO "⑂ variants" — the unrelated second root is not
+    // a sibling. (The pre-fix code listed every null-parent root here.)
+    await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "root-a" }, location.origin));
+    await expect(strip.getByRole("option")).toHaveCount(1);
+    await expect(forks).toHaveCount(0);
+
+    // A child of root-a has one true sibling (child-a2): exactly one fork button,
+    // not one-per-root, and its popover lists the two real variants.
+    await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "child-a1" }, location.origin));
+    await expect(strip.getByRole("option")).toHaveCount(2);
+    await expect(forks).toHaveCount(1);
+    await expect(forks).toHaveText("⑂ 2 variants");
+    await forks.click();
+    const variants = page.getByRole("listbox", { name: "Variants", exact: true });
+    await expect(variants.getByRole("option")).toHaveCount(2);
+    await variants.getByRole("option").nth(1).click();
+    await expect(strip.getByRole("option")).toHaveCount(2);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test(`${theme}: compare has a keyboard and pointer slider; info copies full params`, async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await setup(page, theme);
+    await pickTile(page, 0);
+    await expect(viewBar(page).getByRole("button", { name: "Compare to parent" })).toHaveCount(0);
+    await pickTile(page, 1);
+    const compareButton = viewBar(page).getByRole("button", { name: "Compare to parent" });
+    await compareButton.hover();
+    const tooltip = viewBar(page).getByRole("tooltip", { name: "Compare to parent", exact: true });
+    await expect(tooltip).toBeVisible();
+    const tooltipBox = (await tooltip.boundingBox())!;
+    const stageBox = (await page.locator(".stage-viewport").boundingBox())!;
+    expect(tooltipBox.x).toBeGreaterThanOrEqual(stageBox.x);
+    expect(tooltipBox.y).toBeGreaterThanOrEqual(stageBox.y);
+    expect(tooltipBox.x + tooltipBox.width).toBeLessThanOrEqual(stageBox.x + stageBox.width);
+    expect(tooltipBox.y + tooltipBox.height).toBeLessThanOrEqual(stageBox.y + stageBox.height);
+    const buttonBox = (await compareButton.boundingBox())!;
+    expect(tooltipBox.y).toBeGreaterThanOrEqual(buttonBox.y + buttonBox.height);
+    await viewBar(page).getByRole("button", { name: "Compare to parent" }).click();
+    const slider = page.getByRole("slider", { name: "Parent / result split" });
+    await expect(slider).toHaveAttribute("aria-valuenow", "50");
+    await slider.focus();
+    await slider.press("ArrowRight");
+    // The full-height hit area must not paint a second pair of divider lines.
+    const divider = page.locator(".compare-divider:visible");
+    await expect(divider).toHaveCount(1);
+    const dividerBox = (await divider.boundingBox())!;
+    expect(dividerBox.width).toBeGreaterThan(0);
+    expect(dividerBox.width).toBeLessThanOrEqual(3);
+    const hitBox = (await slider.boundingBox())!;
+    expect(dividerBox.x + dividerBox.width / 2).toBeCloseTo(hitBox.x + hitBox.width / 2);
+    const gripBox = (await slider.locator(".compare-grip").boundingBox())!;
+    expect(dividerBox.x + dividerBox.width / 2).toBeCloseTo(gripBox.x + gripBox.width / 2);
+    expect(await slider.evaluate(el => {
+      const css = getComputedStyle(el);
+      return [css.borderLeftWidth, css.borderRightWidth, css.outlineStyle, css.boxShadow, css.backgroundColor];
+    })).toEqual(["0px", "0px", "none", "none", "rgba(0, 0, 0, 0)"]);
+    await expect(slider.locator(".compare-grip")).toHaveCSS("outline-style", "solid");
+    await expect(slider).toHaveAttribute("aria-valuenow", "51");
+    await slider.press("Home");
+    await expect(slider).toHaveAttribute("aria-valuenow", "0");
+    await slider.press("End");
+    await expect(slider).toHaveAttribute("aria-valuenow", "100");
+    await slider.press("ArrowLeft");
+    const box = (await slider.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down(); await page.mouse.move(box.x - 100, box.y + box.height / 2); await page.mouse.up();
+    expect(Number(await slider.getAttribute("aria-valuenow"))).toBeLessThan(99);
+    await viewBar(page).getByRole("button", { name: "Image info" }).click();
+    const info = page.getByRole("dialog", { name: "Image info" });
+    await expect(info).toContainText("protolabs/qwen-image");
+    await expect(info).toContainText("Model id");
+    await expect(info).toContainText("middle");
+    await info.getByRole("button", { name: "Copy params" }).click();
+    expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))).toEqual(records[1].params);
+    await expect(info.getByRole("button", { name: "Open in new tab" })).toBeVisible();
+  });
+
+  test(`${theme}: reduced motion stops progress and result animation and preserves composer focus`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await setup(page, theme);
+    await pickTile(page, 0);
+    await prompt(page).fill("a silver vase");
+    const tracking = page.waitForRequest(r => r.url().endsWith("/jobs/job-1"));
+    await prompt(page).press("Control+Enter");
+    await tracking;
+    const animations = () => page.locator(".images *").evaluateAll(els => els.filter(el => { const name = getComputedStyle(el).animationName; return name && name !== "none"; }).map(el => el.className));
+    expect(await animations()).toEqual([]);
+    await busDone(page, { job_id: "job-1", media_id: "middle" });
+    await expect(prompt(page)).toBeFocused();
+    await expect(page.locator(".render-overlay")).toHaveCount(0);
+    expect(await animations()).toEqual([]);
+  });
+
+  test(`${theme}: empty History text fits its column at 1505px`, async ({ page }) => {
+    await page.setViewportSize({ width: 1505, height: 900 });
+    await setup(page, theme, "pending", catalog, []);
+    const hint = page.locator(".history-col p.hint");
+    await expect(hint).toContainText("No renders yet");
+    const bounds = await hint.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth,
+      right: el.getBoundingClientRect().right, column: el.closest(".history-col")!.getBoundingClientRect().right }));
+    expect(bounds.scroll).toBeLessThanOrEqual(bounds.client);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.column);
+    expect(await page.locator(".history-col .g-head").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   });
 }

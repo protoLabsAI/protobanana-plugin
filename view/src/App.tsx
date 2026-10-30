@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { ActionBar, type EditMode } from "./ActionBar";
 import { Composer, type Margins } from "./Composer";
+import { Lineage } from "./Lineage";
 import { Gallery } from "./Gallery";
 import { StageView } from "./StageView";
 import {
@@ -283,6 +284,8 @@ export function App() {
   const [mode, setMode] = useState<EditMode>(null);
   const [mask, setMask] = useState("");
   const [margins, setMargins] = useState<Margins>(ZERO_MARGINS);
+  // Unfiltered index for ancestry and siblings, independent of Gallery filters.
+  const [lineageRecords, setLineageRecords] = useState<HistoryRecord[]>([]);
   // A bounded recent-history slice for the Compose "pick from History" slots,
   // emitted by the History grid (no extra fetch of its own).
   const [records, setRecords] = useState<HistoryRecord[]>([]);
@@ -340,9 +343,8 @@ export function App() {
     return () => window.removeEventListener("message", receive);
   }, []);
 
-  // Resolve the shared history index on demand — used only to turn a focused
-  // media id into a record (§5 "Send to agent" inbox). History's own grid owns
-  // its paging/refresh (Gallery), so the shell keeps no records of its own.
+  // Resolve the complete shared index for ancestry and the focus inbox.
+  // Gallery separately owns its filtered paging and refresh.
   const reload = useCallback(async () => {
     const all: HistoryRecord[] = [];
     let cursor: number | null = null;
@@ -352,6 +354,22 @@ export function App() {
     } while (cursor !== null);
     return all;
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let generation = 0;
+    const refresh = async () => {
+      const token = ++generation;
+      try {
+        await ready();
+        const all = await reload();
+        if (alive && token === generation) setLineageRecords(all);
+      } catch { /* retain the last known lineage on a transient history failure */ }
+    };
+    void refresh();
+    const off = subscribe("protobanana.job.done", refresh);
+    return () => { alive = false; off(); };
+  }, [reload, revision]);
 
   useEffect(() => {
     let alive = true;
@@ -430,6 +448,9 @@ export function App() {
   // The record backing the current image (for Vary params, Star, Send to agent).
   // Uploads have no record; a pruned selection isn't editable.
   const currentRecord = prunedSelected ? undefined : selected;
+
+  const parentRecord = lineageRecords.find(rec => rec.media_id === currentRecord?.parent_id);
+  const parentImage = useImage(parentRecord?.pruned ? undefined : currentRecord?.parent_id);
 
   // MarginCanvas edits one edge; mirror it into the shared Margins (keeps the
   // composer's numeric inputs in lock-step — WCAG 2.5.7).
@@ -637,12 +658,12 @@ export function App() {
               static-fallback warning is the raw exception and shows only behind
               the banner's Details disclosure above (fix round: a). */}
           {catalogSource !== "static" && warnings.length > 0 && (
-            <div className="banner banner-warn" role="alert">
+            <div className="banner banner-warn" role="status">
               <strong>Settings</strong>
               <ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
             </div>
           )}
-          {focusError && <p className="banner banner-warn focus-error" role="alert">{focusError}</p>}
+          {focusError && <p className="banner banner-warn focus-error" role="status">{focusError}</p>}
 
           <StageView
             loading={loading}
@@ -650,6 +671,8 @@ export function App() {
             prunedSelected={prunedSelected}
             unreachable={Boolean(unreachable)}
             current={current}
+            parent={parentImage}
+            record={currentRecord}
             editRef={editRef ?? ""}
             mode={mode}
             dimmed={activeRendering}
@@ -693,6 +716,8 @@ export function App() {
               onFocusComposer={() => setFocusSignal(s => s + 1)}
             />
           )}
+
+          {hasImage && selected && <Lineage records={lineageRecords} selected={selected} pending={busy} onSelect={pickRecord} />}
 
           <Composer
             catalog={catalog}

@@ -1,26 +1,41 @@
 import type { HistoryRecord, JobRequest } from "./api";
+import { Button, Popover, Spinner } from "./ds-pending";
+import { ImageThumb, ScrollArea, ThumbnailStrip } from "./ds-pending/ImageThumb";
 
 export function branchRequest(rec: HistoryRecord): JobRequest {
   return { op: rec.op, alias: rec.alias, parent_id: rec.parent_id,
     params: { ...rec.params, seed: (Number(rec.params.seed || 0) + 1 + Math.floor(Math.random() * (2 ** 30))) % (2 ** 31) } };
 }
 
-export function Lineage({ records, selected, onSelect, onBranch }: {
-  records: HistoryRecord[]; selected?: string; onSelect: (rec: HistoryRecord) => void; onBranch: (req: JobRequest) => void;
+export function Lineage({ records, selected, pending, onSelect }: {
+  records: HistoryRecord[]; selected: HistoryRecord; pending: boolean; onSelect: (rec: HistoryRecord) => void;
 }) {
-  const ids = new Set(records.map(r => r.media_id));
-  const visited = new Set<string>();
-  const node = (rec: HistoryRecord): React.ReactNode => {
-    if (visited.has(rec.media_id)) return null;
-    visited.add(rec.media_id);
-    const children = records.filter(r => r.parent_id === rec.media_id);
-    return <li key={rec.media_id}><div className="lineage-node">
-      <button type="button" aria-pressed={selected === rec.media_id} disabled={rec.pruned} onClick={() => onSelect(rec)}>{rec.op} · {rec.media_id.slice(0, 8)}{rec.pruned ? " (pruned)" : ""}</button>
-      <button type="button" onClick={() => onBranch(branchRequest(rec))} title="Re-run these parameters with a new seed, alongside this node">Branch / new seed</button>
-    </div>{children.length > 0 && <ul>{children.map(node)}</ul>}</li>;
-  };
-  return <section className="lineage" aria-label="Lineage"><h2 className="section-title">Lineage</h2>
-    <p className="hint">Select an image to continue editing. Branch re-runs it as a sibling with a new seed.</p>
-    <ul>{records.filter(r => !r.parent_id || !ids.has(r.parent_id)).map(node)}{records.filter(r => !visited.has(r.media_id)).map(node)}</ul>
+  const index = new Map(records.map(rec => [rec.media_id, rec]));
+  index.set(selected.media_id, selected);
+  const path: HistoryRecord[] = [];
+  const seen = new Set<string>();
+  let node: HistoryRecord | undefined = selected;
+  while (node && !seen.has(node.media_id)) {
+    seen.add(node.media_id); path.unshift(node);
+    node = node.parent_id ? index.get(node.parent_id) : undefined;
+  }
+  return <section className="lineage" aria-label="Lineage">
+    <ScrollArea><ThumbnailStrip aria-label="Image lineage">
+      {path.map(rec => <ImageThumb key={rec.media_id} record={rec} selected={rec.media_id === selected.media_id} onSelect={() => onSelect(rec)} />)}
+      {pending && <span className="lineage-pending" role="option" aria-selected={false} aria-label="Rendering image"><Spinner /></span>}
+    </ThumbnailStrip></ScrollArea>
+    {path.map(rec => {
+      // Variants are images that SHARE A PARENT. A root has no parent (parent_id
+      // is null/empty), so it has no variants — never treat `null === null` as a
+      // shared parent, or every root in the shared index would fork into every
+      // other unrelated root. Only a real (truthy) parent id groups siblings.
+      const siblings = rec.parent_id ? [...index.values()].filter(r => r.parent_id === rec.parent_id) : [];
+      if (siblings.length < 2) return null;
+      return <Popover key={rec.media_id} side="top" label={`Variants of ${rec.op}`} trigger={({ toggle, open }) =>
+        <Button size="xs" aria-expanded={open} onClick={toggle}>⑂ {siblings.length} variants</Button>}>
+        <ThumbnailStrip aria-label="Variants">{siblings.map(sibling => <ImageThumb key={sibling.media_id} record={sibling}
+          selected={sibling.media_id === selected.media_id} onSelect={() => onSelect(sibling)} />)}</ThumbnailStrip>
+      </Popover>;
+    })}
   </section>;
 }

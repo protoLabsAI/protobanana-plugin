@@ -10,9 +10,10 @@ data dir, so nothing touches the real host or the repo."""
 
 import asyncio
 import base64
+import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -509,3 +510,153 @@ def test_retired_identity_records_file_under_edit(env):
     assert not mod.history.read(op="identity")["records"]
     old = next(r for r in mod.history.read(op="edit")["records"] if r["media_id"] == "m-old")
     assert old["alias"] == "protolabs/qwen-image-edit"  # re-run can't hit a retired alias
+
+
+# ---------------------------------------- data-dir resolution (the reinstall fix)
+# history.jsonl + the starred copies used to live in <plugin_dir>/.studio, INSIDE
+# the installed plugin code dir, so every plugin update/reinstall wiped them.
+# configure() now resolves the dir via the host SDK's per-instance plugin store
+# (graph.sdk.plugin_store), which lives outside the code dir. These tests stub
+# that SDK seam (injected into sys.modules) so they stay host-free.
+
+
+def _load_history():
+    """Load the plugin fresh and return its ``history`` submodule directly. The
+    submodule only becomes an attribute of the package once register() runs its
+    imports, and register() would call configure() for us — so import it on its
+    own (its top level has no host imports) to exercise configure() in isolation."""
+    import importlib
+
+    mod = load_plugin(PLUGIN_ROOT, "protobanana")
+    return importlib.import_module(mod.__name__ + ".history")
+
+
+def _record(media_id, **over):
+    rec = {"media_id": media_id, "parent_id": None, "op": "generate",
+           "alias": "protolabs/x", "params": {"prompt": media_id}, "source": "studio",
+           "job_id": None, "created": 1000.0, "starred": False}
+    rec.update(over)
+    return rec
+
+
+def _fake_sdk(store_path, calls):
+    """A fake ``graph.sdk`` module whose ``plugin_store`` mirrors the real
+    signature (``plugin_store(subdir="", *, plugin_id) -> Path``): it creates the
+    dir, scoped to one path per instance, and records each ``plugin_id`` it got."""
+    m = ModuleType("graph.sdk")
+
+    def plugin_store(subdir="", *, plugin_id):
+        calls.append(plugin_id)
+        p = Path(store_path)
+        if subdir:
+            p = p / subdir
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    m.plugin_store = plugin_store
+    return m
+
+
+def test_configure_resolves_dir_via_plugin_store(tmp_path, monkeypatch):
+    hist = _load_history()
+    store = tmp_path / "sdk-store"
+    calls = []
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, calls))
+
+    code = tmp_path / "code"
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    hist.configure(reg)
+
+    assert hist._dir == store                 # the SDK store, not the code dir
+    assert hist._dir != code / ".studio"
+    assert calls == ["protobanana"]           # called with plugin_id=registry.plugin_id
+
+
+def test_records_and_stars_survive_a_reinstall(tmp_path, monkeypatch):
+    """A record + a starred copy written before a reinstall (new plugin_dir, same
+    SDK store because the plugin_id is unchanged) are still read back after."""
+    hist = _load_history()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "keep.png").write_bytes(PNG_1x1)
+
+    def media_file(mid):
+        if not mid:
+            return None
+        for f in sorted(media.glob(f"{mid}.*")):
+            if f.is_file():
+                return f
+        return None
+
+    monkeypatch.setattr(hist, "media_file", media_file)
+
+    hist.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=tmp_path / "code-v1"))
+    hist.append(_record("keep"))
+    assert hist.star("keep") is True
+
+    # Reinstall: the code dir is replaced (new plugin_dir) but the SDK store is the
+    # same, so configure() lands on the same data dir.
+    hist.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=tmp_path / "code-v2"))
+
+    recs = hist.read()["records"]
+    assert [r["media_id"] for r in recs] == ["keep"]
+    assert recs[0]["starred"] is True and recs[0]["pruned"] is False
+
+
+def test_configure_migrates_legacy_studio_dir(tmp_path, monkeypatch):
+    """A pre-fix <plugin_dir>/.studio/history.jsonl + starred file are COPIED into
+    an empty SDK store on configure; the legacy files are left in place."""
+    hist = _load_history()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+
+    code = tmp_path / "code"
+    legacy = code / ".studio"
+    (legacy / "starred").mkdir(parents=True)
+    (legacy / "history.jsonl").write_text(json.dumps(_record("old1")) + "\n", encoding="utf-8")
+    (legacy / "starred" / "old1.png").write_bytes(PNG_1x1)
+
+    hist.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=code))
+
+    assert (store / "history.jsonl").is_file()                     # copied in
+    assert (store / "starred" / "old1.png").read_bytes() == PNG_1x1
+    assert (legacy / "history.jsonl").is_file()                    # legacy NOT deleted
+    assert (legacy / "starred" / "old1.png").is_file()
+    assert [r["media_id"] for r in hist.read()["records"]] == ["old1"]
+
+
+def test_configure_does_not_overwrite_existing_store_history(tmp_path, monkeypatch):
+    """An existing store history.jsonl is never overwritten or merged on migration."""
+    hist = _load_history()
+    store = tmp_path / "sdk-store"
+    store.mkdir()
+    (store / "history.jsonl").write_text(json.dumps(_record("store1")) + "\n", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+
+    code = tmp_path / "code"
+    legacy = code / ".studio"
+    legacy.mkdir(parents=True)
+    (legacy / "history.jsonl").write_text(json.dumps(_record("old1")) + "\n", encoding="utf-8")
+
+    hist.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=code))
+
+    assert [r["media_id"] for r in hist.read()["records"]] == ["store1"]  # no merge
+
+
+def test_sdk_unavailable_falls_back_to_legacy(tmp_path, monkeypatch):
+    """If graph.sdk can't be imported (old host / no host), configure() falls back
+    to <plugin_dir>/.studio and never raises; data_dir= still overrides."""
+    hist = _load_history()
+    monkeypatch.setitem(sys.modules, "graph.sdk", None)  # import raises ModuleNotFoundError
+
+    code = tmp_path / "code"
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    hist.configure(reg)  # must not raise
+    assert hist._dir == code / ".studio"
+
+    explicit = tmp_path / "explicit"
+    hist.configure(reg, data_dir=explicit)  # data_dir wins even with no SDK
+    assert hist._dir == explicit

@@ -24,8 +24,18 @@ image.
 (``tools.py`` contract); every write path here swallows and logs its own
 exceptions, so a history failure can never break a tool call or a job.
 
-Host-free: the only host dependency (``infra.media`` for the store location) is
-imported lazily inside :func:`media_file`, which tests monkeypatch.
+**Where it lives.** The index + starred copies live under the host SDK's
+per-instance plugin store (``graph.sdk.plugin_store``), NOT inside the plugin
+code dir — a dot-dir beside the code (``<plugin_dir>/.studio``) is wiped by
+every plugin update/reinstall, which used to erase ``history.jsonl`` and the
+starred copies that are supposed to outlive media retention. :func:`configure`
+resolves the store via the SDK and migrates any pre-fix ``<plugin_dir>/.studio``
+contents in on first run.
+
+Host-free: the host dependencies are imported lazily — ``infra.media`` (for the
+store location) inside :func:`media_file`, and ``graph.sdk.plugin_store`` (for
+the data-dir location) inside :func:`_resolve_dir` — so this module stays
+importable with no host; tests monkeypatch both.
 """
 
 from __future__ import annotations
@@ -65,27 +75,97 @@ _TOOL_OP = {
 
 
 def configure(registry, data_dir=None) -> None:
-    """Resolve and remember the plugin data dir (index + starred copies).
+    """Resolve and remember the data dir (index + starred copies).
 
-    Prefers a host-provided scoped data dir if the registry exposes one, else
-    falls back to a dot-dir beside the plugin code (``plugin_dir`` is the seam
-    the view route already relies on). ``data_dir`` overrides both (tests)."""
+    The dir comes from the host SDK's per-instance plugin store
+    (``graph.sdk.plugin_store(plugin_id=...)``) so it lives OUTSIDE the plugin
+    code dir and survives plugin updates/reinstalls — those replace the code dir
+    and used to wipe ``history.jsonl`` plus the starred copies. If the SDK is
+    absent (old host / host-free tests) we fall back to the legacy
+    ``<plugin_dir>/.studio``. ``data_dir`` overrides everything (tests).
+
+    On first run against the SDK store (resolved dir ≠ the legacy dir), a
+    one-time migration COPIES any pre-fix ``<plugin_dir>/.studio`` index + starred
+    copies into the store, so history written before this fix isn't lost. Never
+    raises: a bad resolve or migration degrades, it doesn't break register()."""
     global _dir
-    _dir = Path(data_dir) if data_dir is not None else _resolve_dir(registry)
+    if data_dir is not None:
+        _dir = Path(data_dir)
+        return
+    _dir = _resolve_dir(registry)
+    legacy = _legacy_dir(registry)
+    if _dir != legacy:
+        _migrate_legacy(legacy, _dir)
 
 
 def _resolve_dir(registry) -> Path:
-    for name in ("plugin_data_dir", "data_dir", "state_dir"):
-        val = getattr(registry, name, None)
-        if callable(val):
-            try:
-                val = val()
-            except Exception:  # noqa: BLE001 - a bad host seam must not break register()
-                val = None
-        if val:
-            return Path(val)
+    """The data dir, from the host SDK's per-instance plugin store (which creates
+    it, scoped to the running instance). Per the protoagent-plugin contract,
+    plugin state goes in ``sdk.plugin_store()``, never a hand-rolled path. The
+    import is lazy so the module stays host-free; on any failure (old host / no
+    host) we log a warning and fall back to the legacy ``<plugin_dir>/.studio``
+    so register() never raises."""
+    try:
+        from graph.sdk import plugin_store
+
+        return Path(plugin_store(plugin_id=registry.plugin_id))
+    except Exception:  # noqa: BLE001 - old host / no host must not break register()
+        log.warning(
+            "[protobanana] graph.sdk.plugin_store unavailable; falling back to the "
+            "legacy <plugin_dir>/.studio history dir",
+            exc_info=True,
+        )
+        return _legacy_dir(registry)
+
+
+def _legacy_dir(registry) -> Path:
+    """The pre-fix dot-dir beside the plugin code — the migration source and the
+    SDK-unavailable fallback."""
     base = Path(getattr(registry, "plugin_dir", ".") or ".")
     return base / ".studio"
+
+
+def _migrate_legacy(legacy: Path, store: Path) -> None:
+    """One-time copy of a pre-fix ``<plugin_dir>/.studio`` index + starred copies
+    into the SDK store, so history written before this fix survives the move.
+
+    COPIES (never moves or deletes the legacy files). Copies ``history.jsonl``
+    only when the store lacks one (an existing store log is never overwritten or
+    merged); copies each ``starred/`` file not already in the store. Best-effort:
+    swallows and logs per the module's never-raises contract, and logs one info
+    line with counts when anything was migrated."""
+    try:
+        copied_history = False
+        copied_starred = 0
+
+        legacy_hist = legacy / "history.jsonl"
+        store_hist = store / "history.jsonl"
+        if legacy_hist.is_file() and not store_hist.exists():
+            store.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(legacy_hist, store_hist)
+            copied_history = True
+
+        legacy_starred = legacy / "starred"
+        if legacy_starred.is_dir():
+            store_starred = store / "starred"
+            for src in sorted(legacy_starred.iterdir()):
+                if not src.is_file():
+                    continue
+                dst = store_starred / src.name
+                if dst.exists():
+                    continue
+                store_starred.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+                copied_starred += 1
+
+        if copied_history or copied_starred:
+            log.info(
+                "[protobanana] migrated legacy Studio history into the SDK store "
+                "(history=%s, starred_copies=%d)",
+                copied_history, copied_starred,
+            )
+    except Exception:  # noqa: BLE001 - module contract: never raises
+        log.exception("[protobanana] legacy history migration failed")
 
 
 def _history_file() -> Path | None:

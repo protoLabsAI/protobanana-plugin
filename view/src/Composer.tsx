@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { type CatalogEntry, type JobRequest } from "./api";
-import { Button, FormField, Input, Popover, Segmented, Textarea } from "./ds-pending";
+import { Badge, Button, FormField, Input, Popover, Segmented, Textarea } from "./ds-pending";
 
 // The always-visible composer (design §3/§4). Prompt first: one Textarea and one
 // primary Button are the only permanent controls. With no current image the verb
@@ -79,6 +79,7 @@ export function Composer({
   }, [hasSize, aspect, quality]);
 
   const disabled = loading || unreachable || prompt.trim() === "";
+  const selectedAlias = entry?.aliases[quality] ?? entry?.aliases.final ?? "";
 
   const submit = () => {
     if (!entry || disabled) return;
@@ -94,8 +95,7 @@ export function Composer({
       params.seed = seed;
     }
     const tier = quality;
-    const alias = entry.aliases[tier] ?? entry.aliases.final ?? undefined;
-    onSubmit({ op: entry.op, tier, alias: alias || undefined, params, parent_id: parentId || undefined });
+    onSubmit({ op: entry.op, tier, alias: selectedAlias || undefined, params, parent_id: parentId || undefined });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -131,6 +131,12 @@ export function Composer({
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={onKeyDown}
       />
+
+      {(entry?.licence?.non_commercial || /rmbg/i.test(selectedAlias)) && (
+        <Badge tone="warning" className="badge-nc">
+          Non-commercial · {entry?.licence?.note || "RMBG CC BY-NC"}
+        </Badge>
+      )}
 
       <div className="composer-actions">
         <Popover

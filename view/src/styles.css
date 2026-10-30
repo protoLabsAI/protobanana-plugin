@@ -320,6 +320,11 @@ body {
   resize: vertical;
 }
 
+.composer .badge-nc {
+  justify-self: start;
+  white-space: normal;
+}
+
 .composer-actions {
   display: flex;
   align-items: center;

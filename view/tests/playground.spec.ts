@@ -112,6 +112,49 @@ test("history waits for a late-arriving plugin kit", async ({ page }) => {
 // Criteria 1–3 (shell, empty→Generate→current+History, badge/queue, Apply edit),
 // run in both themes as before.
 for (const theme of ["light", "dark"]) {
+  for (const note of ["Research use only", ""]) {
+    test(`${theme}: composer preserves catalog non-commercial disclosure (${note || "fallback"})`, async ({ page }) => {
+      const ops = catalog.map(entry => ({
+        ...entry,
+        licence: { non_commercial: entry.op === "generate", note },
+      }));
+      await setup(page, theme, "pending", ops);
+      const badge = page.getByRole("form", { name: "Composer" }).locator(".badge-nc");
+      await expect(badge).toHaveText(`Non-commercial · ${note || "RMBG CC BY-NC"}`);
+      await expect(badge).toBeVisible();
+      // Selecting an image changes the active entry to the unrestricted editor.
+      await page.locator(".g-tile").first().getByRole("button", { name: /render/ }).click();
+      await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
+      await expect(badge).toHaveCount(0);
+      await page.getByRole("button", { name: "+ New", exact: true }).click();
+      await expect(badge).toBeVisible();
+    });
+  }
+
+  test(`${theme}: non-commercial alias fallback follows the submitted quality alias`, async ({ page }) => {
+    const ops = catalog.map(entry => ({
+      ...entry,
+      licence: { non_commercial: false },
+      aliases: { final: "example/commercial", draft: "example/RMBG-editor" },
+    }));
+    const requests = await setup(page, theme, "pending", ops);
+    const badge = page.locator(".composer .badge-nc");
+    await expect(badge).toHaveCount(0);
+    await page.getByRole("button", { name: /^Options:/ }).click();
+    await page.getByRole("radio", { name: "Draft", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(badge).toHaveText("Non-commercial · RMBG CC BY-NC");
+    await expect(badge).toBeVisible();
+    await prompt(page).fill("A ceramic vase");
+    await page.getByRole("button", { name: "Generate", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].alias).toBe("example/RMBG-editor");
+    await page.getByRole("button", { name: /^Options:/ }).click();
+    await page.getByRole("radio", { name: "Final", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(badge).toHaveCount(0);
+  });
+
   test(`${theme}: shell, empty→generate→current+history, queue badge, apply edit`, async ({ page }) => {
     const requests = await setup(page, theme);
 

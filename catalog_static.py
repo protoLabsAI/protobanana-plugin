@@ -91,7 +91,8 @@ _PARAMS: dict[str, dict] = {
     "inpaint": _schema({
         "image": {"type": "string", "title": "Image"},
         "mask": {"type": "string", "title": "Mask",
-                 "description": "PNG where transparent = the region to edit."},
+                 "description": "Source-sized PNG: transparent = the region to edit, "
+                                "or black/white with white = edit."},
         "prompt": _PROMPT,
         "negative_prompt": _NEGATIVE,
         "seed": _SEED,

@@ -3,10 +3,14 @@
 // this view today: it declares `react@^19` as a peer (this app is React 18) and
 // its export map points most subpaths at raw `.tsx` that drag in framer-motion,
 // radix, dnd-kit, streamdown and katex. So until a `waits_for: npm:@protolabsai/ui`
-// swap card lands, these components mirror the DS API with the SAME `.pl-*`
-// class names and consume the host's `--pl-*` tokens (served by
-// /_ds/plugin-kit.css). Every colour is a token with a literal fallback — no
+// swap card lands, these components mirror the DS API but emit a PLUGIN-LOCAL
+// `.pbx-*` class namespace — never `.pl-*`, which belongs to /_ds/plugin-kit.css
+// (kit `.pl-popover`/`.pl-empty`/`.pl-menu`/… are real, differently-shaped rules
+// that would clobber these stand-ins when the kit CSS is loaded in the console).
+// They still consume the host's `--pl-*` design TOKENS (served by
+// /_ds/plugin-kit.css); every colour is a token with a literal fallback — no
 // hard-coded palette — so the view also renders standalone (tests, screenshots).
+// The ds-pending-no-pl-collision test guards the namespace split.
 
 import {
   createContext,
@@ -32,7 +36,7 @@ function cx(...parts: Array<string | false | null | undefined>): string {
 export function Spinner({ size = 18, label }: { size?: number; label?: string }) {
   return (
     <span
-      className="pl-spinner"
+      className="pbx-spinner"
       role={label ? "status" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
@@ -63,14 +67,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cx(
-        "pl-btn",
-        variant === "primary" && "pl-btn--primary",
-        variant === "ghost" && "pl-btn--ghost",
-        variant === "danger" && "pl-btn--danger",
-        icon && "pl-btn--icon",
-        size === "xs" && "pl-btn--xs",
-        size === "sm" && "pl-btn--sm",
-        loading && "pl-btn--loading",
+        "pbx-btn",
+        variant === "primary" && "pbx-btn--primary",
+        variant === "ghost" && "pbx-btn--ghost",
+        variant === "danger" && "pbx-btn--danger",
+        icon && "pbx-btn--icon",
+        size === "xs" && "pbx-btn--xs",
+        size === "sm" && "pbx-btn--sm",
+        loading && "pbx-btn--loading",
         className,
       )}
       {...rest}
@@ -92,7 +96,7 @@ export function Badge({
   className?: string;
   children: ReactNode;
 }) {
-  return <span className={cx("pl-badge", tone && `pl-badge--${tone}`, className)}>{children}</span>;
+  return <span className={cx("pbx-badge", tone && `pbx-badge--${tone}`, className)}>{children}</span>;
 }
 
 // ---------------------------------------------------------------- PanelHeader
@@ -113,17 +117,17 @@ export function PanelHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className={cx("pl-panel-header", compact && "pl-panel-header--compact", className)}>
-      <div className="pl-panel-header-titles">
-        {kicker && <span className="pl-panel-header-kicker">{kicker}</span>}
+    <header className={cx("pbx-panel-header", compact && "pbx-panel-header--compact", className)}>
+      <div className="pbx-panel-header-titles">
+        {kicker && <span className="pbx-panel-header-kicker">{kicker}</span>}
         {compact ? (
-          <h2 className="pl-panel-header-title">{title}</h2>
+          <h2 className="pbx-panel-header-title">{title}</h2>
         ) : (
-          <h1 className="pl-panel-header-title">{title}</h1>
+          <h1 className="pbx-panel-header-title">{title}</h1>
         )}
       </div>
-      {children && <div className="pl-panel-header-mid">{children}</div>}
-      {actions && <div className="pl-panel-header-actions">{actions}</div>}
+      {children && <div className="pbx-panel-header-mid">{children}</div>}
+      {actions && <div className="pbx-panel-header-actions">{actions}</div>}
     </header>
   );
 }
@@ -151,7 +155,7 @@ export function Tabs({
   ariaLabel?: string;
 }) {
   return (
-    <div className={cx("pl-tabs", `pl-tabs--${variant}`)} role="tablist" aria-label={ariaLabel}>
+    <div className={cx("pbx-tabs", `pbx-tabs--${variant}`)} role="tablist" aria-label={ariaLabel}>
       {items.map((it) => (
         <button
           key={it.id}
@@ -161,7 +165,7 @@ export function Tabs({
           aria-disabled={it.disabled || undefined}
           disabled={it.disabled}
           title={it.title}
-          className={cx("pl-tab", value === it.id && "pl-tab--active")}
+          className={cx("pbx-tab", value === it.id && "pbx-tab--active")}
           onClick={() => !it.disabled && onChange?.(it.id)}
         >
           {it.label}
@@ -192,14 +196,14 @@ export function Segmented({
   size?: "sm";
 }) {
   return (
-    <div className={cx("pl-segmented", size === "sm" && "pl-segmented--sm")} role="radiogroup" aria-label={ariaLabel}>
+    <div className={cx("pbx-segmented", size === "sm" && "pbx-segmented--sm")} role="radiogroup" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={value === o.value}
-          className={cx("pl-segmented-opt", value === o.value && "is-active")}
+          className={cx("pbx-segmented-opt", value === o.value && "is-active")}
           onClick={() => onChange(o.value)}
         >
           {o.label}
@@ -225,15 +229,15 @@ export function Empty({
   className?: string;
 }) {
   return (
-    <div className={cx("pl-empty", className)}>
+    <div className={cx("pbx-empty", className)}>
       {icon && (
-        <div className="pl-empty-icon" aria-hidden="true">
+        <div className="pbx-empty-icon" aria-hidden="true">
           {icon}
         </div>
       )}
-      {title && <p className="pl-empty-title">{title}</p>}
-      {description && <p className="pl-empty-desc">{description}</p>}
-      {action && <div className="pl-empty-action">{action}</div>}
+      {title && <p className="pbx-empty-title">{title}</p>}
+      {description && <p className="pbx-empty-desc">{description}</p>}
+      {action && <div className="pbx-empty-action">{action}</div>}
     </div>
   );
 }
@@ -255,12 +259,12 @@ export function Callout({
 }) {
   // No role="alert" here (design §7 "Live regions"): overlay callouts are polite.
   return (
-    <div className={cx("pl-callout", `pl-callout--${tone}`, className)}>
-      <div className="pl-callout-body">
-        {title && <strong className="pl-callout-title">{title}</strong>}
-        {children && <div className="pl-callout-text">{children}</div>}
+    <div className={cx("pbx-callout", `pbx-callout--${tone}`, className)}>
+      <div className="pbx-callout-body">
+        {title && <strong className="pbx-callout-title">{title}</strong>}
+        {children && <div className="pbx-callout-text">{children}</div>}
       </div>
-      {actions && <div className="pl-callout-actions">{actions}</div>}
+      {actions && <div className="pbx-callout-actions">{actions}</div>}
     </div>
   );
 }
@@ -281,9 +285,9 @@ export function Banner({
   children?: ReactNode;
 }) {
   return (
-    <div className={cx("pl-banner", `pl-banner--${tone}`, className)} role={role}>
-      <div className="pl-banner-body">{children}</div>
-      {action && <div className="pl-banner-actions">{action}</div>}
+    <div className={cx("pbx-banner", `pbx-banner--${tone}`, className)} role={role}>
+      <div className="pbx-banner-body">{children}</div>
+      {action && <div className="pbx-banner-actions">{action}</div>}
     </div>
   );
 }
@@ -292,7 +296,7 @@ export function Banner({
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   function Textarea({ className, ...rest }, ref) {
-    return <textarea ref={ref} className={cx("pl-textarea", className)} {...rest} />;
+    return <textarea ref={ref} className={cx("pbx-textarea", className)} {...rest} />;
   },
 );
 
@@ -300,7 +304,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   function Input({ className, ...rest }, ref) {
-    return <input ref={ref} className={cx("pl-input", className)} {...rest} />;
+    return <input ref={ref} className={cx("pbx-input", className)} {...rest} />;
   },
 );
 
@@ -319,10 +323,10 @@ export function FormField({
   // Switch are <button>s, which ARE labelable), so a <label> would hijack the
   // first button's accessible name. Each control carries its own aria-label.
   return (
-    <div className={cx("pl-field", className)}>
-      <span className="pl-field-label">{label}</span>
+    <div className={cx("pbx-field", className)}>
+      <span className="pbx-field-label">{label}</span>
       {children}
-      {hint && <span className="pl-field-hint">{hint}</span>}
+      {hint && <span className="pbx-field-hint">{hint}</span>}
     </div>
   );
 }
@@ -344,7 +348,7 @@ export function DropdownSelect({
 }) {
   return (
     <select
-      className={cx("pl-select", className)}
+      className={cx("pbx-select", className)}
       aria-label={ariaLabel}
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -377,14 +381,50 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
-      className={cx("pl-switch", checked && "is-on")}
+      className={cx("pbx-switch", checked && "is-on")}
       onClick={() => onChange(!checked)}
     >
-      <span className="pl-switch-track">
-        <span className="pl-switch-thumb" />
+      <span className="pbx-switch-track">
+        <span className="pbx-switch-thumb" />
       </span>
-      {label && <span className="pl-switch-label">{label}</span>}
+      {label && <span className="pbx-switch-label">{label}</span>}
     </button>
+  );
+}
+
+// --------------------------------------------------------------------- Slider
+
+// Token-only range control (DS gap #643): a native <input type="range"> whose
+// thumb/track read as the DS accent (`accent-color: --pl-color-accent`) instead
+// of the browser-blue default. Used by the Inpaint mask tools (brush / feather).
+export function Slider({
+  value,
+  min = 0,
+  max = 100,
+  step = 1,
+  ariaLabel,
+  className,
+  onChange,
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  ariaLabel?: string;
+  className?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <input
+      type="range"
+      className={cx("pbx-slider", className)}
+      aria-label={ariaLabel}
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+    />
   );
 }
 
@@ -402,14 +442,14 @@ export function Progress({
   const pct = Math.max(0, Math.min(100, value ?? 0));
   return (
     <div
-      className={cx("pl-progress", indeterminate && "pl-progress--indet")}
+      className={cx("pbx-progress", indeterminate && "pbx-progress--indet")}
       role="progressbar"
       aria-label={ariaLabel}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={indeterminate ? undefined : Math.round(pct)}
     >
-      <span className="pl-progress-bar" style={indeterminate ? undefined : { width: `${pct}%` }} />
+      <span className="pbx-progress-bar" style={indeterminate ? undefined : { width: `${pct}%` }} />
     </div>
   );
 }
@@ -417,12 +457,12 @@ export function Progress({
 // ------------------------------------------------------------------ Skeletons
 
 export function Skeleton({ className, style }: { className?: string; style?: CSSProperties }) {
-  return <span className={cx("pl-skeleton", className)} style={style} aria-hidden="true" />;
+  return <span className={cx("pbx-skeleton", className)} style={style} aria-hidden="true" />;
 }
 
 export function SkeletonGroup({ count = 3, className }: { count?: number; className?: string }) {
   return (
-    <div className={cx("pl-skeleton-group", className)} aria-hidden="true">
+    <div className={cx("pbx-skeleton-group", className)} aria-hidden="true">
       {Array.from({ length: count }, (_, i) => (
         <Skeleton key={i} />
       ))}
@@ -467,11 +507,11 @@ export function Popover({
   }, [open]);
 
   return (
-    <div className={cx("pl-popover", className)} ref={rootRef}>
+    <div className={cx("pbx-popover", className)} ref={rootRef}>
       {trigger({ open, toggle: () => setOpen((o) => !o) })}
       {open && (
         <div
-          className={cx("pl-popover-panel", `pl-popover-panel--${align}`, `pl-popover-panel--${side}`)}
+          className={cx("pbx-popover-panel", `pbx-popover-panel--${align}`, `pbx-popover-panel--${side}`)}
           role="dialog"
           aria-label={label}
         >
@@ -508,9 +548,9 @@ export function Drawer({
 
   if (!open) return null;
   return (
-    <div className="pl-drawer-overlay" onMouseDown={onClose}>
+    <div className="pbx-drawer-overlay" onMouseDown={onClose}>
       <div
-        className={cx("pl-drawer", `pl-drawer--${side}`)}
+        className={cx("pbx-drawer", `pbx-drawer--${side}`)}
         role="dialog"
         aria-modal="true"
         aria-label={label}
@@ -530,9 +570,9 @@ export function Drawer({
 // shown (CSS `display:none` → the role="tooltip" node isn't announced at rest).
 export function Tooltip({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <span className="pl-tooltip-wrap">
+    <span className="pbx-tooltip-wrap">
       {children}
-      <span role="tooltip" className="pl-tooltip">
+      <span role="tooltip" className="pbx-tooltip">
         {label}
       </span>
     </span>
@@ -555,10 +595,10 @@ export function Chip({
   className?: string;
 }) {
   return (
-    <span className={cx("pl-chip", className)}>
-      <span className="pl-chip-label">{label}</span>
+    <span className={cx("pbx-chip", className)}>
+      <span className="pbx-chip-label">{label}</span>
       {onRemove && (
-        <button type="button" className="pl-chip-x" aria-label={removeLabel || "Remove"} onClick={onRemove}>
+        <button type="button" className="pbx-chip-x" aria-label={removeLabel || "Remove"} onClick={onRemove}>
           <span aria-hidden="true">×</span>
         </button>
       )}
@@ -587,8 +627,8 @@ export function Menu({
   children: ReactNode;
 }) {
   return (
-    <Popover trigger={trigger} label={label} align={align} side={side} className={cx("pl-menu", className)}>
-      <div role="menu" className="pl-menu-list">
+    <Popover trigger={trigger} label={label} align={align} side={side} className={cx("pbx-menu", className)}>
+      <div role="menu" className="pbx-menu-list">
         {children}
       </div>
     </Popover>
@@ -607,9 +647,9 @@ export function MenuItem({
   children: ReactNode;
 }) {
   return (
-    <button type="button" role="menuitem" className="pl-menu-item" disabled={disabled} onClick={onClick}>
+    <button type="button" role="menuitem" className="pbx-menu-item" disabled={disabled} onClick={onClick}>
       {icon && (
-        <span className="pl-menu-item-icon" aria-hidden="true">
+        <span className="pbx-menu-item-icon" aria-hidden="true">
           {icon}
         </span>
       )}
@@ -644,9 +684,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={show}>
       {children}
-      <div className="pl-toasts" role="status" aria-live="polite">
+      <div className="pbx-toasts" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} className="pl-toast">
+          <div key={t.id} className="pbx-toast">
             {t.message}
           </div>
         ))}
@@ -750,10 +790,25 @@ export const DownloadIcon = () => (
   </Glyph>
 );
 
+// Distinct from EditIcon's pencil (design §4 action bar): a paper-plane "send"
+// glyph so "Send to agent" never reads as another Edit.
 export const SendIcon = () => (
   <Glyph>
-    <path d="M4 20h7" />
-    <path d="M14.5 4.5 20 10 9 21H3.5v-5.5Z" />
+    <path d="M22 2 11 13" />
+    <path d="M22 2 15 22l-4-9-9-4Z" />
+  </Glyph>
+);
+
+// Settings/sliders glyph for the composer options trigger when it collapses to an
+// icon below 780px (design §8 breakpoints).
+export const SlidersIcon = () => (
+  <Glyph>
+    <path d="M4 7h16" />
+    <path d="M4 12h16" />
+    <path d="M4 17h16" />
+    <circle cx="9" cy="7" r="2" />
+    <circle cx="15" cy="12" r="2" />
+    <circle cx="8" cy="17" r="2" />
   </Glyph>
 );
 

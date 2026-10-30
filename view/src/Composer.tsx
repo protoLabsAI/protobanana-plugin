@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { type CatalogEntry, type HistoryRecord, type JobRequest } from "./api";
 import type { EditMode } from "./ActionBar";
-import { Badge, Button, Chip, FormField, Input, Popover, Segmented, Textarea } from "./ds-pending";
+import { Badge, Button, Chip, FormField, Input, Popover, Segmented, SlidersIcon, Textarea } from "./ds-pending";
 
 // The always-visible composer (design §3/§4). Prompt first: one Textarea and one
 // primary Button are the only permanent controls. With no current image the verb
@@ -94,7 +94,7 @@ function RefSlot({ index, value, records, onChange }: {
               onChange={(e) => { read(e.target.files?.[0]); e.target.value = ""; }} />
           </label>
           <select
-            className="pl-select"
+            className="pbx-select"
             aria-label={`Pick reference ${index} from history`}
             value=""
             onChange={(e) => e.target.value && onChange(e.target.value)}
@@ -324,8 +324,13 @@ export function Composer({
               disabled={loading || unreachable}
               onClick={toggle}
             >
+              {/* Below 780px the button shrinks to a sliders icon (design §8); the
+                  summary text + caret hide, and the aria-label keeps its name. */}
+              <span className="composer-options-icon" aria-hidden="true">
+                <SlidersIcon />
+              </span>
               <span className="composer-options-summary">{optionSummary}</span>
-              <span aria-hidden="true">▾</span>
+              <span className="composer-options-caret" aria-hidden="true">▾</span>
             </Button>
           )}
         >

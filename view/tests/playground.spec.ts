@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { CatalogEntry, HistoryRecord, JobRequest } from "../src/api";
 
 // Read the real catalog: the browser fixture must evolve with the Python schema.
@@ -906,4 +907,85 @@ test("§6: the per-slot free-text media reference field is gone", async ({ page 
   await bar(page).getByRole("button", { name: "Compose", exact: true }).click();
   await expect(page.getByLabel("Pick reference 1 from history", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: /reference/i })).toHaveCount(0);
+});
+
+// R2 review fix: the ds-pending stand-ins must NOT reuse the kit's `pl-*` class
+// namespace. /_ds/plugin-kit.css defines `.pl-popover`/`.pl-empty`/`.pl-menu`/…
+// with ITS OWN meaning, so a stand-in on a `pl-*` class gets restyled by the kit
+// when both load in the console (the oversized popover wrappers and monospace
+// empty state the review caught). This is the guard: the stand-in source and its
+// CSS may only use the plugin-local `pbx-*` namespace. `--pl-*` design TOKENS
+// (var(--pl-color-*) etc.) stay allowed — they are consumed, not redefined.
+test("ds-pending stand-ins use the pbx-* namespace, never the kit's pl-*", () => {
+  // Checked-in snapshot of the plugin-kit `.pl-*` selectors the stand-ins used to
+  // collide with (from /_ds/plugin-kit.css). Any reappearance is a regression.
+  const KIT_PL_SELECTORS = [
+    "pl-popover", "pl-popover-panel", "pl-menu", "pl-menu-list", "pl-menu-item",
+    "pl-empty", "pl-chip", "pl-callout", "pl-banner", "pl-badge", "pl-btn",
+    "pl-drawer", "pl-drawer-overlay", "pl-tooltip", "pl-tabs", "pl-tab",
+    "pl-segmented", "pl-input", "pl-textarea", "pl-select", "pl-switch",
+    "pl-field", "pl-progress", "pl-spinner", "pl-toast", "pl-toasts",
+    "pl-skeleton", "pl-skeleton-group", "pl-panel-header",
+  ];
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  // Strip comments first: our own comments explain the collision and name the kit
+  // selectors, which would otherwise trip the scan. (No `//` or `/*` lives inside
+  // a string literal in these two hand-written files.)
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // `pl-foo` used as a CLASS — i.e. `pl-` not preceded by `-`, so `--pl-color-*`
+  // tokens and `var(--pl-*` references are skipped.
+  const classTokens = (src: string) => stripComments(src).match(/(?<!-)\bpl-[a-zA-Z0-9-]+/g) ?? [];
+
+  const sources = { "ds-pending/index.tsx": read("../src/ds-pending/index.tsx"), "styles.css": read("../src/styles.css") };
+  for (const [name, src] of Object.entries(sources)) {
+    expect([...new Set(classTokens(src))], `${name} must not use the pl-* class namespace`).toEqual([]);
+  }
+  // Belt-and-braces against the checked-in kit list specifically.
+  const all = Object.values(sources).map(stripComments).join("\n");
+  for (const sel of KIT_PL_SELECTORS) {
+    expect(all, `a stand-in class collides with kit .${sel}`).not.toMatch(new RegExp(`(^|[^-\\w])${sel}\\b`));
+  }
+});
+
+// R2 review fix #2: below 780px the composer options trigger must shrink to a
+// sliders ICON with a name, not a bare "▾" with an empty label.
+test("below 780px the composer options trigger collapses to a named sliders icon", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await setup(page);
+  const options = page.getByRole("button", { name: /Options/ });
+  await expect(options).toBeVisible();
+  await expect(options.locator(".composer-options-icon svg")).toBeVisible();
+  // The summary text and caret are hidden so the icon stands alone.
+  await expect(options.locator(".composer-options-summary")).toBeHidden();
+  await expect(options.locator(".composer-options-caret")).toBeHidden();
+});
+
+// R2 review fix #3: the Inpaint brush/feather controls use the token Slider
+// (accent-colour from the DS token), not an unstyled native browser-blue range.
+test("the Inpaint mask tools use the token Slider, not a native browser range", async ({ page }) => {
+  await setup(page);
+  await pickTile(page, 0);
+  await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+  const brush = page.getByLabel("Brush size", { exact: true });
+  const feather = page.getByLabel("Feather", { exact: true });
+  await expect(brush).toBeVisible();
+  await expect(brush).toHaveClass(/pbx-slider/);
+  await expect(feather).toHaveClass(/pbx-slider/);
+  // accent-color resolves to the DS accent token, never the UA default ("auto").
+  const accent = await brush.evaluate((el) => getComputedStyle(el).accentColor);
+  expect(accent).not.toBe("auto");
+});
+
+// R2 review fix #4: "Send to agent" must not reuse Edit's pencil glyph.
+test("Send to agent uses a distinct icon from Edit", async ({ page }) => {
+  await setup(page);
+  await pickTile(page, 0);
+  const pathsOf = (name: string) =>
+    bar(page).getByRole("button", { name, exact: true }).locator("svg path")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("d")).join("|"));
+  const editPaths = await pathsOf("Edit");
+  const sendPaths = await pathsOf("Send to agent");
+  expect(sendPaths).not.toBe("");
+  expect(sendPaths).not.toBe(editPaths);
 });

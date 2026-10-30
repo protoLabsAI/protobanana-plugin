@@ -257,8 +257,8 @@ export function Gallery({
             )}
           >
             <div className="g-filter-grid">
-              <div className="pl-field">
-                <span className="pl-field-label">Operation</span>
+              <div className="pbx-field">
+                <span className="pbx-field-label">Operation</span>
                 <DropdownSelect
                   ariaLabel="Filter by operation"
                   value={filters.op}
@@ -266,8 +266,8 @@ export function Gallery({
                   options={[{ value: "", label: "All" }, ...(catalog || []).map((e) => ({ value: e.op, label: e.label }))]}
                 />
               </div>
-              <div className="pl-field">
-                <span className="pl-field-label">Source</span>
+              <div className="pbx-field">
+                <span className="pbx-field-label">Source</span>
                 <Segmented
                   ariaLabel="Filter by source"
                   size="sm"

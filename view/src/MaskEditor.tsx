@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Stage, Layer, Image as CanvasImage } from "react-konva";
 import { fetchHistoryImage } from "./api";
+import { Slider } from "./ds-pending";
 
 /** Selection alpha is inverted exactly once at the gateway boundary. */
 export function exportMask(selection: HTMLCanvasElement): string {
@@ -104,8 +105,8 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
         const pixels = undo.current.pop(); if (pixels) selection!.getContext("2d")!.putImageData(pixels, 0, 0); publish();
       }}>Undo</button>
     </div>
-    <label>Brush size (source px)<input aria-label="Brush size" type="range" min="1" max="300" value={size} onChange={e => setSize(+e.target.value)} /></label>
-    <label>Feather (source px)<input aria-label="Feather" type="range" min="0" max="50" value={feather} onChange={e => setFeather(+e.target.value)} /></label>
+    <label>Brush size (source px)<Slider ariaLabel="Brush size" min={1} max={300} value={size} onChange={setSize} /></label>
+    <label>Feather (source px)<Slider ariaLabel="Feather" min={0} max={50} value={feather} onChange={setFeather} /></label>
     {error && <p role="alert">{error}</p>}
     {image && selection && <div className="mask-canvas" style={{ touchAction: "none" }} aria-label="Mask canvas">
       <Stage width={image.naturalWidth * scale} height={image.naturalHeight * scale}

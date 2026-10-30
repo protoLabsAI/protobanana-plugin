@@ -217,3 +217,51 @@ test("a signed job result remains visible when history image retrieval fails", a
   await expect(page.getByAltText("Current result")).toHaveAttribute("src", url);
   await expect(page.getByText("done in 7s", { exact: true })).toBeVisible();
 });
+
+test("inpaint painter exports source-size alpha and supports undo, erase, invert and feather", async ({ page }) => {
+  const requests = await setup(page);
+  await page.getByLabel("Operation", { exact: true }).selectOption("inpaint");
+  await page.getByRole("textbox", { name: "Image reference", exact: true }).fill("root");
+  const canvas = page.getByLabel("Mask canvas").locator("canvas");
+  await expect(canvas).toBeVisible();
+  const box = (await canvas.boundingBox())!;
+  const paint = async (x: number, y: number) => {
+    await page.mouse.move(box.x + x, box.y + y); await page.mouse.down();
+    await page.mouse.move(box.x + x + 20, box.y + y, { steps: 5 }); await page.mouse.up();
+  };
+  const pixels = async () => page.getByRole("textbox", { name: "Mask reference", exact: true }).evaluate(async (el: HTMLInputElement) => {
+    const img = new Image(); img.src = el.value; await img.decode();
+    const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+    const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+    return { width: c.width, height: c.height,
+      center: ctx.getImageData(320, 240, 1, 1).data[3],
+      corner: ctx.getImageData(0, 0, 1, 1).data[3],
+      soft: Array.from(ctx.getImageData(0, 0, c.width, c.height).data).filter((v, i) => i % 4 === 3 && v > 0 && v < 255).length };
+  });
+  await paint(150, 112.5);
+  expect(await pixels()).toMatchObject({ width: 640, height: 480, center: 0, corner: 255 });
+  await page.getByRole("button", { name: "Eraser", exact: true }).click();
+  await paint(150, 112.5);
+  expect((await pixels()).center).toBe(255);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  expect((await pixels()).center).toBe(0);
+  await page.getByRole("button", { name: "Invert", exact: true }).click();
+  expect(await pixels()).toMatchObject({ center: 255, corner: 0 });
+  await page.getByRole("button", { name: "Clear mask", exact: true }).click();
+  expect(await pixels()).toMatchObject({ center: 255, corner: 255 });
+  await page.getByRole("button", { name: "Brush", exact: true }).click();
+  await page.getByLabel("Brush size", { exact: true }).fill("100");
+  await page.getByLabel("Feather", { exact: true }).fill("10");
+  await paint(150, 112.5);
+  expect((await pixels()).soft).toBeGreaterThan(0);
+  await page.getByLabel("Prompt", { exact: true }).fill("A pink ceramic vase");
+  mkdirSync("../docs/screenshots/studio-s4", { recursive: true });
+  await page.screenshot({ path: "../docs/screenshots/studio-s4/inpaint.png", fullPage: true });
+  await page.getByRole("button", { name: "Inpaint", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].params.mask).toMatch(/^data:image\/png/);
+  await expect(page.getByText("Rendering…", { exact: true })).toBeVisible();
+  await page.evaluate(() => window.postMessage({ type: "protoagent:event", topic: "protobanana.job.done",
+    data: { job_id: "job-1", media_id: "leaf", elapsed_s: 1 } }, "*"));
+  await expect(page.getByAltText("Current result")).toBeVisible();
+});

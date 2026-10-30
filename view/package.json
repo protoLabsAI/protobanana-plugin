@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "protoBanana Studio \u2014 the plugin's console view (Vite + React + TS). Built output is committed under dist/ so git installs and the frozen desktop runtime need no Node.",
+  "description": "protoBanana Studio — the plugin's console view (Vite + React + TS). Built output is committed under dist/ so git installs and the frozen desktop runtime need no Node.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,8 +12,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "konva": "^9.3.22",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-konva": "^18.2.16"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

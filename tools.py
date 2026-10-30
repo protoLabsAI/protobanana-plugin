@@ -27,6 +27,7 @@ _DEFAULTS = {
     "gen_model": "protolabs/qwen-image",
     "fast_gen_model": "protolabs/qwen-image-2-1-turbo",
     "edit_model": "protolabs/qwen-image-edit",
+    "inpaint_model": "protolabs/qwen-image-inpaint",
     "fast_edit_model": "protolabs/qwen-image-edit-turbo",
     "chat_model": "protolabs/qwen-image-chat",
     "bgremove_model": "protolabs/qwen-image-bgremove",
@@ -51,7 +52,7 @@ def configure(registry) -> None:
 
 def get_tools() -> list:
     return [generate_image, edit_image, identity_edit, region_edit,
-            remove_background, compose_images, outpaint_image]
+            remove_background, compose_images, outpaint_image, inpaint_image]
 
 
 # ---------------------------------------------------------------- helpers
@@ -511,5 +512,30 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
                         "image": image_ref, "prompt": prompt, "left": left, "top": top,
                         "right": right, "bottom": bottom, "seed": seed},
                        note=_transparency_note(prep, False))
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+async def inpaint_image(image_ref: str, mask_ref: str, prompt: str, seed: int = -1) -> str:
+    """Edit the transparent region of a source-sized alpha mask.
+
+    image_ref and mask_ref accept media ids, /media/ URLs, data URLs or file paths.
+    Transparent mask pixels are edited; opaque pixels are preserved. Opaque
+    black/white masks are unsupported. seed=-1 chooses a random seed.
+    Returns the saved image or a readable error.
+    """
+    try:
+        source = _resolve_image(image_ref)
+        mask = imaging.validate_mask(_resolve_image(mask_ref), source)
+        ref = _registry.save_media(mask, "image/png",
+                                   {"op": "mask", "image": image_ref,
+                                    "polarity": "transparent=edit"})
+        prep = imaging.prepare(source)
+        raw = await client.edit(CFG["inpaint_model"], prompt, prep.data, mask=mask,
+                                fields={"seed": _seed(seed)})
+        return _finish(raw, _caption(prompt, "Inpaint: "),
+                       {"tool": "inpaint_image", "model": CFG["inpaint_model"],
+                        "image": image_ref, "mask": ref.id, "prompt": prompt, "seed": seed})
     except Exception as e:
         return _err(e)

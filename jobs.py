@@ -279,10 +279,18 @@ async def _dispatch(st: dict) -> bytes:
         # edit), so it must NOT go through _image()/imaging.prepare, which
         # flattens alpha onto white — that would erase the region mark. Resolve
         # it with its alpha intact.
+        mask = st.get("_mask")
+        if mask is None:
+            mask = imaging.validate_mask(tools._resolve_image(params["mask"]), image)
+            ref = _registry.save_media(mask, "image/png",
+                                       {"op": "mask", "image": params["image"],
+                                        "polarity": "transparent=edit"})
+            params["mask"] = ref.id
+            st["_mask"] = mask
         return await client.edit(alias, params.get("prompt", ""), image,
                                  fields={"seed": seed,
                                          "negative_prompt": params.get("negative_prompt") or None},
-                                 mask=_mask(params["mask"]))
+                                 mask=mask)
     if op == "region_edit":
         raw = await client.edit(alias, params.get("prompt", ""), image,
                                 fields={"grounding": params.get("grounding") or params.get("region"),

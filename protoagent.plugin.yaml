@@ -52,6 +52,7 @@ config_section: protobanana
 config:
   gen_model: protolabs/qwen-image
   fast_gen_model: protolabs/qwen-image-2-1-turbo
+  inpaint_model: protolabs/qwen-image-inpaint
   edit_model: protolabs/qwen-image-edit
   fast_edit_model: protolabs/qwen-image-edit-turbo
   chat_model: protolabs/qwen-image-chat        # compose rides chat (edits is single-image by spec)
@@ -67,6 +68,7 @@ config:
   studio_retry_backoff_s: 2    # seconds to wait before the single retry (only when studio_retry_on_524 is true)
 
 settings:
+  - { key: inpaint_model, label: "Inpaint model", type: string, description: "Gateway alias for alpha-mask inpainting." }
   - { key: gen_model, label: "Text-to-image model", type: string, description: "Gateway alias for /images/generations (must exist in the gateway's model_list)." }
   - { key: fast_gen_model, label: "Draft (fast) model", type: string, description: "Alias used when generate_image is called with draft=true — a distilled few-step variant." }
   - { key: fast_edit_model, label: "Draft (fast) edit model", type: string, description: "Alias used when edit_image is called with draft=true — the distilled Turbo editor." }

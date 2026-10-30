@@ -51,7 +51,7 @@ def test_register_wires_all_tools(plugin):
     _, reg = plugin
     names = {t.name for t in reg.tools}
     assert names == {"generate_image", "edit_image", "identity_edit", "region_edit",
-                     "remove_background", "compose_images", "outpaint_image"}
+                     "remove_background", "compose_images", "outpaint_image", "inpaint_image"}
 
 
 def test_generate_saves_media_and_returns_envelope(plugin, monkeypatch):

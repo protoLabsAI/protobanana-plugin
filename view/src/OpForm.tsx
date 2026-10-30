@@ -1,3 +1,4 @@
+import { MaskEditor } from "./MaskEditor";
 import { useRef, useState } from "react";
 import { type CatalogEntry, type HistoryRecord, type JobRequest } from "./api";
 
@@ -58,7 +59,7 @@ export function OpForm({ entry, current, records, onSubmit, params, setParams }:
 }) {
   const [tier, setTier] = useState(entry.default_tier || "final");
   const [alias, setAlias] = useState("");
-  const set = (key: string, value: unknown) => setParams({ ...params, [key]: value });
+  const set = (key: string, value: unknown) => setParams({ ...params, ...(key === "image" && entry.op === "inpaint" ? { mask: "" } : {}), [key]: value });
   const selectedAlias = alias || entry.aliases[params.realism ? "realism" : tier] || "";
   return <form className="form" onSubmit={e => { e.preventDefault(); onSubmit({ op: entry.op, tier, alias: alias || undefined, params }); }}>
     <div className="toggle" role="group" aria-label="Quality tier">{["draft", "final"].map(t =>
@@ -72,6 +73,10 @@ export function OpForm({ entry, current, records, onSubmit, params, setParams }:
     {Object.entries(entry.params.properties).map(([key, schema]) => {
       const label = schema.title || key;
       const required = entry.params.required.includes(key);
+      if (key === "mask") return <div key={key}>
+        <InputSlot label="Mask" required={required} records={records} value={String(params.mask || "")} onChange={v => set("mask", v)} />
+        <MaskEditor source={String(params.image || "")} onChange={v => set("mask", v)} />
+      </div>;
       if (key === "image" || key === "person_image") return <InputSlot key={key} label={label} required={required}
         current={current} records={records} value={String(params[key] || "")} onChange={v => set(key, v)} />;
       if (schema.type === "array") {

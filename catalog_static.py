@@ -25,19 +25,22 @@ from __future__ import annotations
 # view clamps the WxH control to the same bounds.
 _SIZE_MIN, _SIZE_MAX, _SIZE_STEP = 256, 2048, 16
 
-# Inpaint has no plugin config key yet (design §1.1 gap); the gateway stem is
-# fixed, so its literal lives here rather than in tools._DEFAULTS.
+# Ultimate fallback alias for a config key that resolves to nothing (an unknown
+# key, or the rare None tier below). Inpaint now carries the ``inpaint_model``
+# config key like every other op, so its default flows from tools._DEFAULTS; this
+# stem only backstops a key that is missing from both config and _DEFAULTS.
 _INPAINT_ALIAS = "protolabs/qwen-image-inpaint"
 
-# ``op`` → tier → config key (``None`` for inpaint, which has no key). The
-# literal fallback for each key comes from tools._DEFAULTS (imported lazily, see
-# _default_alias) so changing a default in tools.py can't leave the Studio
-# catalog and runner on a stale alias. Ops with no distilled "draft" variant
-# point both tiers at the same key.
+# ``op`` → tier → config key. The literal fallback for each key comes from
+# tools._DEFAULTS (imported lazily, see _default_alias) so changing a default in
+# tools.py can't leave the Studio catalog and runner on a stale alias. Ops with
+# no distilled "draft" variant point both tiers at the same key — so changing a
+# setting (e.g. ``inpaint_model``) moves the agent tool and the Studio job/catalog
+# together. A ``None`` value is tolerated and falls back to the fixed stem.
 _ALIASES: dict[str, dict[str, str | None]] = {
     "generate": {"draft": "fast_gen_model", "final": "gen_model"},
     "edit": {"draft": "fast_edit_model", "final": "edit_model"},
-    "inpaint": {"draft": None, "final": None},
+    "inpaint": {"draft": "inpaint_model", "final": "inpaint_model"},
     "region_edit": {"draft": "region_model", "final": "region_model"},
     "identity": {
         "draft": "identity_model",
@@ -178,8 +181,8 @@ _META: dict[str, dict] = {
 def _default_alias(key: str | None) -> str:
     """The literal fallback for a config key — from tools._DEFAULTS (imported
     lazily to keep this module host-free on import), so the single source of
-    truth for default model aliases stays tools._DEFAULTS. ``None`` (inpaint,
-    which has no config key) falls back to the fixed gateway stem."""
+    truth for default model aliases stays tools._DEFAULTS. ``None`` (a tier with
+    no config key) falls back to the fixed gateway stem."""
     if key is None:
         return _INPAINT_ALIAS
     from . import tools
@@ -200,7 +203,7 @@ def alias_for(cfg: dict, op: str, tier: str = "final", override: str | None = No
     if not tiers:
         return None
     # An unknown tier falls back to "final"; a known tier whose value is None
-    # (inpaint) keeps None → the fixed stem via _default_alias.
+    # keeps None → the fixed stem via _default_alias.
     key = tiers.get(tier, tiers["final"])
     if key:
         val = cfg.get(key)

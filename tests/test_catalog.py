@@ -144,6 +144,53 @@ def test_gateway_entry_merges_over_static(monkeypatch):
     assert len(out["ops"]) == 8
 
 
+def test_merge_preserves_static_only_alias_tiers(monkeypatch):
+    """The blocking S6 bug: a gateway op carries ONLY the tiers it knows, so
+    merging its aliases must not drop a tier the static schema defines. identity's
+    ``realism`` variant (and an op's ``draft``) has to survive the merge — gateway
+    wins on the tiers it sends, static backstops the ones it omits."""
+    mod, _ = _load()
+    # A gateway identity entry with draft/final only — no realism tier.
+    ident = {"op": "identity", "aliases": {"draft": "gw-identity", "final": "gw-identity"}}
+    _install_gateway(monkeypatch, {"ops": [ident]}, [])
+
+    out = asyncio.run(mod.catalog.build({}))
+
+    entry = next(e for e in out["ops"] if e["op"] == "identity")
+    assert entry["aliases"]["final"] == "gw-identity"  # gateway wins on final
+    assert entry["aliases"]["draft"] == "gw-identity"
+    # The static realism alias is preserved, not clobbered by a shallow merge.
+    assert entry["aliases"]["realism"] == "protolabs/krea2-identity-edit-realism"
+
+
+def test_realism_renders_on_realism_alias_under_gateway_catalog(monkeypatch):
+    """End-to-end for the blocking bug: with a live gateway catalog whose identity
+    entry omits the realism tier, a Realism job still renders on the realism alias
+    (preserved from the static schema in _run), not the plain identity model."""
+    from test_jobs import PNG_1x1, _data_url
+
+    mod, reg = _load()
+    ident = {"op": "identity", "aliases": {"draft": "gw-identity", "final": "gw-identity"}}
+    _install_gateway(monkeypatch, {"ops": [ident]}, [])
+    rendered = []
+
+    async def edit(alias, prompt, image, **kwargs):
+        rendered.append(alias)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, "edit", edit)
+
+    async def scenario():
+        job_id = mod.jobs.submit(
+            "identity", {"image": _data_url(PNG_1x1), "prompt": "her", "realism": True})
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        assert mod.jobs.get_state(job_id)["alias"] == "protolabs/krea2-identity-edit-realism"
+        assert rendered == ["protolabs/krea2-identity-edit-realism"]
+
+    asyncio.run(scenario())
+
+
 def test_unreachable_falls_back_to_static_stale(monkeypatch):
     """r2: gateway down → the static schema, source=static, stale=true, and no
     workflows_hash (there is no live catalog to hash)."""

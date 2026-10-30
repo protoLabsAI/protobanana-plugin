@@ -119,11 +119,13 @@ async def _live_catalog(cfg: dict) -> dict:
 def _merge_ops(static_ops: list, gateway_ops: list) -> list:
     """Gateway entries OVER the static ones, keyed by ``op``.
 
-    A gateway op shallow-merges onto its static counterpart (gateway keys win, so
-    the static entry backstops any field the gateway omits); a static-only op is
-    kept (additive — the static schema is the floor); a gateway-only op is
-    appended (a new op/alias the gateway added — acceptance r1). Display order is
-    the static order, with any gateway-only ops after it.
+    A gateway op merges onto its static counterpart (gateway keys win, so the
+    static entry backstops any field the gateway omits); the ``aliases`` map is
+    merged tier-by-tier, NOT replaced, so a tier the gateway leaves out survives
+    from the static schema. A static-only op is kept (additive — the static
+    schema is the floor); a gateway-only op is appended (a new op/alias the
+    gateway added — acceptance r1). Display order is the static order, with any
+    gateway-only ops after it.
     """
     by_op: dict = {}
     order: list = []
@@ -135,8 +137,20 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
         if not isinstance(e, dict) or not isinstance(e.get("op"), str) or not e["op"]:
             continue
         op = e["op"]
-        merged = dict(by_op.get(op, {}))
+        static_entry = by_op.get(op, {})
+        merged = dict(static_entry)
         merged.update({k: v for k, v in e.items() if v is not None})
+        # Deep-merge the alias map rather than replace it wholesale: a gateway op
+        # only carries the tiers it knows, so a tier it omits — identity's
+        # ``realism`` variant, an op's ``draft`` — must survive from the static
+        # schema (the gateway still wins on the tiers it DOES send). Without this,
+        # jobs._run's ``aliases.get("realism")`` would miss and silently render
+        # the Realism checkbox on the plain identity model.
+        base_aliases = static_entry.get("aliases")
+        gw_aliases = e.get("aliases")
+        if isinstance(base_aliases, dict) and isinstance(gw_aliases, dict):
+            merged["aliases"] = {**base_aliases,
+                                 **{k: v for k, v in gw_aliases.items() if v}}
         schema = merged.get("params")
         aliases = merged.get("aliases")
         if (not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict)

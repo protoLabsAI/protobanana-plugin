@@ -614,6 +614,45 @@ def test_studio_page_serves_index_html(plugin):
     asyncio.run(scenario())
 
 
+def test_studio_page_base_makes_relative_assets_resolve(plugin):
+    """Blocker regression: the committed bundle links its JS/CSS with RELATIVE
+    ``./assets/...`` URLs, and the page is served at /plugins/protobanana/studio
+    (no trailing slash). Resolved by the browser those would land one dir too
+    high (/plugins/protobanana/assets/...) and 404 — a blank iframe. Prove,
+    against the REAL served page URL, that the injected <base> makes every bundle
+    asset resolve to a path the router actually serves (200), for BOTH the
+    no-slash manifest form and the trailing-slash form."""
+    import re
+    from urllib.parse import urljoin
+
+    mod, reg = plugin
+
+    async def scenario():
+        async with await _client(_app(reg)) as ac:
+            for page in ("/plugins/protobanana/studio", "/plugins/protobanana/studio/"):
+                r = await ac.get(page)
+                assert r.status_code == 200, page
+                html = r.text
+                m = re.search(r'<base href="([^"]+)">', html)
+                assert m, f"no <base> injected for {page!r}"
+                base_href = m.group(1)
+                # RELATIVE base: a leading '/' would drop the fleet proxy's slug prefix
+                assert not base_href.startswith("/"), f"base must be relative, got {base_href!r}"
+                effective = urljoin(page, base_href)  # the document's effective base URL
+                refs = re.findall(r'(?:src|href)="(\./assets/[^"]+)"', html)
+                assert refs, "the page links no relative bundle assets"
+                for ref in refs:
+                    resolved = urljoin(effective, ref)
+                    assert resolved.startswith("/plugins/protobanana/studio/assets/"), (page, ref, resolved)
+                    got = await ac.get(resolved)
+                    assert got.status_code == 200, f"{page!r}: bundle asset {resolved!r} is not served"
+            # and the misresolution the fix prevents is NOT served (no route one dir up)
+            bad = await ac.get("/plugins/protobanana/assets/does-not-matter.js")
+            assert bad.status_code == 404
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("op", ["edit", "region_edit", "identity"])
 @pytest.mark.parametrize("keep_transparency", [None, True, False])
 def test_studio_edit_restores_size_and_expected_alpha(plugin, monkeypatch, op, keep_transparency):

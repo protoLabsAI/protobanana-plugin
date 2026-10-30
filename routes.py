@@ -36,6 +36,40 @@ def _view_dir(registry) -> Path:
     return base / "view" / "dist"
 
 
+def page_base_href(page_path: str, request_path: str) -> str:
+    """Relative ``<base>`` href that makes the bundle's own ``./assets/...`` URLs
+    resolve under ``{page}/assets/...`` — where :func:`studio_asset` serves them —
+    whatever request path the page was reached by.
+
+    The view is declared at ``/plugins/protobanana/studio`` (no trailing slash —
+    the manifest view path), so a browser resolves the bundle's relative
+    ``./assets/x`` against the PARENT dir (``/plugins/protobanana/``), landing on
+    ``/plugins/protobanana/assets/x`` which no route serves (the bundle 404s and
+    the iframe stays blank). Pointing ``<base>`` at the page's own last segment
+    pulls resolution back under the page. The href is RELATIVE on purpose: the
+    fleet proxy serves the page under a per-member slug prefix the backend never
+    sees, and a relative base keeps that prefix where a root-absolute one drops it.
+
+    - reached WITHOUT a trailing slash → ``"studio/"`` (document base dir is the
+      parent, so name the page to descend into it);
+    - reached WITH a trailing slash → ``"./"`` (base dir is already the page).
+    """
+    name = page_path.rstrip("/").rsplit("/", 1)[-1]
+    return "./" if request_path.endswith("/") else f"{name}/"
+
+
+def with_base_href(html: str, href: str) -> str:
+    """Insert ``<base href=...>`` as the first child of ``<head>`` so it governs
+    the relative asset URLs that follow it; root-absolute ``/_ds/...`` kit URLs
+    are unaffected. Returns the html unchanged if it carries no ``<head>``."""
+    marker = "<head>"
+    i = html.find(marker)
+    if i == -1:
+        return html
+    at = i + len(marker)
+    return f'{html[:at]}\n    <base href="{href}">{html[at:]}'
+
+
 def safe_asset(view_dir: Path, rel: str) -> Path | None:
     """Resolve ``rel`` under ``view_dir/assets`` or return ``None``.
 
@@ -57,7 +91,7 @@ def safe_asset(view_dir: Path, rel: str) -> Path | None:
 
 def build_router(registry):
     """Build the Studio APIRouter. Call at register() time (imports FastAPI)."""
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter, HTTPException, Request
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
     from pydantic import BaseModel
 
@@ -97,12 +131,21 @@ def build_router(registry):
         return {"ops": catalog_static.build_catalog(cfg)}
 
     # ---- public page + assets ---------------------------------------------
+    # Serve the page at the manifest path AND at its trailing-slash form: the
+    # host opens the no-slash path, but a <base> is injected per-request so the
+    # bundle's relative ./assets/ URLs resolve under {_PAGE}/assets either way
+    # (see page_base_href) — the fix for the bundle 404ing one dir too high.
     @router.get(_PAGE)
-    async def studio_page():  # noqa: ANN202
+    @router.get(f"{_PAGE}/")
+    async def studio_page(request: Request):  # noqa: ANN202
         index = view_dir / "index.html"
         if not index.is_file():
             raise HTTPException(status_code=404, detail="Studio view not built")
-        return HTMLResponse(index.read_text(encoding="utf-8"))
+        html = with_base_href(
+            index.read_text(encoding="utf-8"),
+            page_base_href(_PAGE, request.url.path),
+        )
+        return HTMLResponse(html)
 
     @router.get(f"{_PAGE}/assets/{{asset:path}}")
     async def studio_asset(asset: str):  # noqa: ANN202

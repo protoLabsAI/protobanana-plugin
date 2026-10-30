@@ -34,6 +34,20 @@ function failedPhase(d: Partial<JobState>): Phase {
   };
 }
 
+// The job store is in-memory, so a plugin reload, host restart, or ring eviction
+// makes GET /jobs/{id} 404 (getJob → null) for a job we are still tracking. When
+// that persists and no bus event lands either, we surface THIS recoverable
+// failure rather than hanging in `pending` forever with Generate disabled.
+function lostPhase(): Phase {
+  return {
+    kind: "failed",
+    error: "job not found",
+    errorKind: "job_missing",
+    recoverable: true,
+    hint: "Lost track of this render — the Studio reloaded or the job expired. Press Retry to run it again.",
+  };
+}
+
 /** Submit a job and track it to completion over the bus, with a GET /jobs/{id}
  *  polling backstop. Returns the current phase and a `run(req)` launcher. */
 function useJobRunner() {
@@ -87,21 +101,41 @@ function useJobRunner() {
     const offDone = subscribe("protobanana.job.done", onDone);
     const offFailed = subscribe("protobanana.job.failed", onFailed);
 
+    // One authoritative "can't reach this job" signal: count consecutive ticks
+    // where we observe no live job — a 404 (getJob → null, the store was wiped)
+    // OR a thrown request error. Any live read resets it. After MAX_STRIKES with
+    // no bus event either, give up polling and surface a recoverable failure so
+    // the form re-enables instead of hanging in `pending`.
+    let strikes = 0;
+    const MAX_STRIKES = 4; // ~4 × POLL_MS ≈ 10s grace; the bus can still win first
+
+    const strike = () => {
+      strikes += 1;
+      if (strikes >= MAX_STRIKES) finish(lostPhase());
+    };
+
     const poll = window.setInterval(async () => {
       if (settled) return;
+      let st: JobState | null;
       try {
-        const st = await getJob(jobId);
-        if (!st || settled) return;
-        if (st.status === "done") {
-          finish({ kind: "done", url: st.url || "", mediaId: st.media_id ?? null, elapsed: st.elapsed_s ?? 0 });
-        } else if (st.status === "failed") {
-          finish(failedPhase(st));
-        } else {
-          const qp = st.queue_position ?? 0;
-          setPhase((p) => (p.kind === "pending" && p.jobId === jobId ? { ...p, queuePosition: qp } : p));
-        }
+        st = await getJob(jobId);
       } catch {
-        /* transient — the next tick retries; the bus may still land */
+        strike(); // transient request error — but don't hang forever on it
+        return;
+      }
+      if (settled) return;
+      if (st === null) {
+        strike(); // 404: job gone from the in-memory store (reload/restart/evicted)
+        return;
+      }
+      strikes = 0;
+      if (st.status === "done") {
+        finish({ kind: "done", url: st.url || "", mediaId: st.media_id ?? null, elapsed: st.elapsed_s ?? 0 });
+      } else if (st.status === "failed") {
+        finish(failedPhase(st));
+      } else {
+        const qp = st.queue_position ?? 0;
+        setPhase((p) => (p.kind === "pending" && p.jobId === jobId ? { ...p, queuePosition: qp } : p));
       }
     }, POLL_MS);
 
@@ -306,10 +340,14 @@ function Canvas({ entry, phase, onRetry }: { entry?: CatalogEntry; phase: Phase;
 
   if (phase.kind === "failed") {
     const recoverable = phase.recoverable || phase.errorKind === "gateway_timeout";
+    // A 524 keeps the GPU job running (retry re-attaches); a missing job was lost
+    // and must be re-run. Both are recoverable (Retry shows), but say which.
+    const heading =
+      phase.errorKind === "gateway_timeout" ? "Still rendering" : recoverable ? "Render interrupted" : "Render failed";
     return (
       <div className="canvas">
         <div className={`failure${recoverable ? " recoverable" : ""}`}>
-          <div className="kind">{recoverable ? "Still rendering" : "Render failed"}</div>
+          <div className="kind">{heading}</div>
           <div className="hint">{phase.hint || phase.error}</div>
           {recoverable ? (
             <button className="submit" type="button" onClick={onRetry}>

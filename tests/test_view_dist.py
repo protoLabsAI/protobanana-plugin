@@ -67,10 +67,11 @@ def test_dist_is_a_real_react_build_not_the_placeholder():
 
 
 def test_bundle_wires_the_bus_and_endpoints():
-    """The job bus topics and the plugin-relative endpoints survive the build —
-    so the committed bundle is the Studio wiring, not an empty shell."""
+    """The job bus topics, the plugin-relative endpoints, and the missing-job
+    failure path all survive the build — so the committed bundle is the Studio
+    wiring (including the poll's give-up path), not an empty shell."""
     js = "\n".join(p.read_text(encoding="utf-8") for p in (DIST / "assets").glob("*.js"))
-    for needle in ("protobanana.job.done", "protobanana.job.failed", "catalog", "jobs"):
+    for needle in ("protobanana.job.done", "protobanana.job.failed", "catalog", "jobs", "job_missing"):
         assert needle in js, f"built bundle is missing {needle!r}"
 
 
@@ -97,18 +98,49 @@ def test_app_source_routes_data_through_the_kit():
     assert "protobanana.job.done" in app and "protobanana.job.failed" in app
 
 
+def test_app_poll_does_not_hang_on_a_missing_job():
+    """Major regression guard (App.tsx poll): a 404 from GET /jobs/{id} — the
+    in-memory store was wiped by a reload/restart, or the job was evicted — must
+    NOT leave the view stuck in `pending` with Generate disabled. The poll bounds
+    consecutive unreachable ticks and settles into a recoverable failure."""
+    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+    # the give-up path exists and is recoverable (Retry re-runs the last request)
+    assert "lostPhase" in app and "job_missing" in app, "no missing-job failure path in the poll"
+    assert "recoverable: true" in app, "a lost job must be recoverable so the form re-enables"
+    # a bound on consecutive misses, not the old silent `if (!st || settled) return;`
+    assert re.search(r"MAX_STRIKES", app), "the poll has no bound on consecutive misses"
+    assert not re.search(r"if \(!st \|\| settled\) return;", app), "the old silent-return bug is back"
+
+
 def test_api_module_uses_the_plugin_kit_handshake():
-    """api.ts is the single seam: it calls the kit's handshake and exposes the
-    slug-aware wrappers + the bus bridge the whole view depends on."""
+    """api.ts is the single seam: it CALLS the kit's handshake (not merely names
+    it) and exposes the slug-aware wrappers + the bus bridge the view depends on."""
     api = (SRC / "api.ts").read_text(encoding="utf-8")
-    for fn in ("initPluginView", "apiFetch", "apiUrl", "subscribe"):
+    for fn in ("apiFetch", "apiUrl", "subscribe"):
         assert fn in api, f"api.ts does not reference the kit's {fn}"
+    # the handshake is actually invoked, not just declared in the interface
+    assert re.search(r"initPluginView\s*\(", api), "api.ts never calls initPluginView()"
 
 
-def test_committed_build_matches_the_committed_source():
-    """A changed index.html entry hash with no matching asset file (or vice
-    versa) would mean a half-committed build. Cross-check the referenced JS
-    entry actually exists — the freshness guard CI relies on (r6)."""
+def test_committed_build_is_fresh_against_source():
+    """Freshness guard (r6): distinctive string literals that live only in the
+    view source must also appear in the committed bundle, so a source edit that
+    was not rebuilt (a stale dist/) fails HERE instead of shipping. String
+    literals survive Vite's minification — unlike renamed identifiers — so this
+    actually compares the build against view/src, which the name has always
+    promised. Also guards against a half-committed build (entry hash with no
+    matching asset on disk)."""
+    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+    api = (SRC / "api.ts").read_text(encoding="utf-8")
+    js = "\n".join(p.read_text(encoding="utf-8") for p in (DIST / "assets").glob("*.js"))
+    for needle in (
+        "protobanana.job.done",
+        "protobanana.job.failed",
+        "job_missing",
+        "Lost track of this render",
+    ):
+        assert needle in app or needle in api, f"test needle {needle!r} vanished from source"
+        assert needle in js, f"stale dist/: {needle!r} is in the source but not the built bundle — rebuild view/"
     html = _index_html()
     entry = re.search(r'src="(\./assets/index-[^"]+\.js)"', html)
     assert entry, "no hashed entry in index.html"

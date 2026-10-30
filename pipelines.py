@@ -505,7 +505,7 @@ def _load_text_spec(text: str) -> dict:
     return data
 
 
-def _enabled_plugin_ids(manifests) -> set[str]:
+def _enabled_plugin_ids(manifests, config=None) -> set[str]:
     """The ids among ``manifests`` the host would actually load — the enable gate
     ``loader.load_plugins`` applies, re-applied here because ``discover_plugins``
     returns every installed manifest regardless of enable state (the gate lives in
@@ -514,20 +514,27 @@ def _enabled_plugin_ids(manifests) -> set[str]:
     A plugin is on when it is a ``builtin``, or when (its manifest opts in with
     ``enabled: true``, OR the operator's ``plugins.enabled`` lists it, OR an
     enabled bundled plugin ``enables`` it) AND ``plugins.disabled`` doesn't list
-    it — the one rule every "is this plugin on?" site uses. The live config and
-    the shared implied-enables resolver are read lazily; if either is unavailable
-    (host-free, or pre-boot) we fall back to the author opt-in (``enabled: true``)
-    alone, which never over-includes a disabled plugin."""
-    enabled_ids: set[str] = set()
-    disabled_ids: set[str] = set()
-    try:
-        from graph import sdk
+    it — the one rule every "is this plugin on?" site uses.
 
-        cfg = sdk.config()
-        enabled_ids = set(getattr(cfg, "plugins_enabled", None) or ())
-        disabled_ids = set(getattr(cfg, "plugins_disabled", None) or ())
-    except Exception:  # noqa: BLE001 - no live config → author opt-in only
-        pass
+    ``config`` is the graph config the gate must read. The late-tool factory passes
+    the config the host is *building the graph with*, because during a settings
+    reload the host builds the new graph (running the factories) BEFORE it assigns
+    ``STATE.graph_config = new_config`` — so the live config seen by ``sdk.config()``
+    still holds the OLD settings at that moment, and reading it would keep a
+    just-disabled plugin's tools and miss a just-enabled plugin's. When no config is
+    passed (routes / run_pipeline, outside a graph build) the live config is read
+    lazily instead. The implied-enables resolver is likewise read lazily; if either
+    is unavailable (host-free, or pre-boot) we fall back to the author opt-in
+    (``enabled: true``) alone, which never over-includes a disabled plugin."""
+    if config is None:
+        try:
+            from graph import sdk
+
+            config = sdk.config()
+        except Exception:  # noqa: BLE001 - no live config → author opt-in only
+            config = None
+    enabled_ids = set(getattr(config, "plugins_enabled", None) or ())
+    disabled_ids = set(getattr(config, "plugins_disabled", None) or ())
     implied: dict = {}
     try:
         from graph.plugins.installer import bundled_plugins_dir
@@ -550,7 +557,7 @@ def _enabled_plugin_ids(manifests) -> set[str]:
     return on
 
 
-def _shipped_pipelines():
+def _shipped_pipelines(config=None):
     """Read specs shipped by other **enabled** plugins, using the host's canonical
     roots and manifests.
 
@@ -559,6 +566,8 @@ def _shipped_pipelines():
     ``discover_plugins`` lists every installed manifest, enabled or not, so the
     enable gate is applied here (:func:`_enabled_plugin_ids`): a plugin the host
     would not load must not have its pipelines listed, run, or exposed as tools.
+    ``config`` (the graph config a late-tool factory is building with) is threaded
+    to the gate so a reload's new enable state takes effect immediately.
     """
     try:
         from graph.plugins.installer import loader_roots
@@ -567,7 +576,7 @@ def _shipped_pipelines():
         return
     try:
         manifests = list(discover_plugins(loader_roots()))
-        enabled = _enabled_plugin_ids(manifests)
+        enabled = _enabled_plugin_ids(manifests, config)
         for manifest in manifests:
             if manifest.id == "protobanana" or manifest.id not in enabled:
                 continue
@@ -598,9 +607,10 @@ def _candidate_files(name: str) -> list[Path]:
     return out
 
 
-def load_pipeline(name: str) -> dict:
+def load_pipeline(name: str, config=None) -> dict:
     """Load a saved or bundled pipeline by id/name, validated. Raises SpecError if
-    there is no such pipeline or the stored spec is invalid."""
+    there is no such pipeline or the stored spec is invalid. ``config`` is threaded
+    to the shipped-pipeline enable gate (see :func:`_enabled_plugin_ids`)."""
     name = (name or "").strip()
     if not name or "/" in name or "\\" in name or name.startswith("."):
         raise SpecError(f"invalid pipeline name {name!r}")
@@ -612,13 +622,13 @@ def load_pipeline(name: str) -> dict:
             raise
         except Exception as exc:  # noqa: BLE001 - a bad read falls through to "not found"
             log.warning("[protobanana] could not read pipeline %s: %s", path, exc)
-    for source, spec in _shipped_pipelines():
+    for source, spec in _shipped_pipelines(config):
         if spec["id"] == name:
             return spec
     raise SpecError(f"no pipeline named {name!r}")
 
 
-def list_pipelines() -> list[dict]:
+def list_pipelines(config=None) -> list[dict]:
     """Every pipeline known to the plugin — those shipped by other enabled plugins,
     this plugin's own bundled starters, and any saved in the data dir — as
     ``{id, name, description, source, read_only, expose_as_tool, inputs, steps}``
@@ -627,9 +637,10 @@ def list_pipelines() -> list[dict]:
     (``read_only`` False). Precedence runs other-plugin < bundled < saved: a local
     bundled starter or a saved spec shadows another plugin's pipeline of the same
     id and makes it editable again, and a saved pipeline shadows a bundled starter.
-    Never raises."""
+    ``config`` is threaded to the shipped-pipeline enable gate (see
+    :func:`_enabled_plugin_ids`). Never raises."""
     found: "OrderedDict[str, dict]" = OrderedDict()
-    for source, spec in _shipped_pipelines():
+    for source, spec in _shipped_pipelines(config):
         pid = spec["id"]
         if pid not in found:
             found[pid] = {
@@ -730,13 +741,18 @@ def _pipeline_tool(spec):
 
 
 def pipeline_tool_factory(all_tools, config):
-    """Build a fresh set of opted-in pipeline tools at every graph build."""
+    """Build a fresh set of opted-in pipeline tools at every graph build.
+
+    ``config`` is the graph config the host is building with; it is threaded to the
+    shipped-pipeline enable gate so a settings reload's new enable/disable state
+    takes effect on THIS build, not a later one (during a reload the host runs the
+    factories before it publishes the new config as ``STATE.graph_config``)."""
     result = []
     try:
         names = {tool.name for tool in all_tools}
-        for summary in list_pipelines():
+        for summary in list_pipelines(config):
             try:
-                spec = load_pipeline(summary["id"])
+                spec = load_pipeline(summary["id"], config)
                 if spec.get("expose_as_tool") is not True:
                     continue
                 tool = _pipeline_tool(spec)
@@ -956,8 +972,7 @@ async def _execute(run_id: str) -> None:
     except Exception as exc:  # noqa: BLE001 - treat a catalog failure as a run failure
         run.update(status="failed", error=f"catalog unavailable: {exc}",
                    elapsed_s=round(time.monotonic() - started, 2))
-        _publish("protobanana.pipeline.run.done",
-                 {"run_id": run_id, "pipeline": run["pipeline"], "status": "failed"})
+        _publish_run_done(run_id, run["pipeline"], "failed")
         return
     workflows_hash = snapshot.get("workflows_hash")
     input_values = _resolve_input_values(spec, run["inputs"])
@@ -1007,8 +1022,7 @@ async def _execute(run_id: str) -> None:
                      {"run_id": run_id, "step": sid, "op": op, "alias": node.get("alias"),
                       "error": fail.error, "error_kind": fail.error_kind,
                       "recoverable": fail.recoverable, "hint": fail.hint})
-            _publish("protobanana.pipeline.run.done",
-                     {"run_id": run_id, "pipeline": run["pipeline"], "status": "failed"})
+            _publish_run_done(run_id, run["pipeline"], "failed")
             return
         # Cache + history + node.done only after the output is safely saved.
         run["_bytes"][sid] = raw
@@ -1026,9 +1040,7 @@ async def _execute(run_id: str) -> None:
     run.update(status="done",
                output_media_id=out_node.get("media_id") if out_node else None,
                elapsed_s=round(time.monotonic() - started, 2))
-    _publish("protobanana.pipeline.run.done",
-             {"run_id": run_id, "pipeline": run["pipeline"], "status": "done",
-              "output_media_id": run["output_media_id"]})
+    _publish_run_done(run_id, run["pipeline"], "done", run["output_media_id"])
 
 
 # ---------------------------------------------------------- step preparation
@@ -1189,11 +1201,24 @@ def _data_url(raw: bytes) -> str:
 def _publish(topic: str, data: dict) -> None:
     """Announce on the core event bus via the registry (ADR 0039). A background
     task must not die on a bad bus call, so failures are logged."""
-    if topic == "protobanana.pipeline.run.done":
-        data = {**data, "pipeline_id": data["pipeline"],
-                "output_media_ids": [data["output_media_id"]] if data.get("output_media_id") else []}
     try:
         if _registry is not None:
             _registry.emit(topic, data)
     except Exception:  # noqa: BLE001 - best-effort notification
         log.exception("[protobanana] failed to publish %s", topic)
+
+
+def _publish_run_done(run_id: str, pipeline: str, status: str,
+                      output_media_id: str | None = None) -> None:
+    """Publish the terminal ``protobanana.pipeline.run.done`` event. Its public
+    contract (design §3.2) is ``run_id`` / ``pipeline_id`` / ``output_media_ids`` —
+    built here, at the single place every run.done is sent, so anyone reading the
+    call sites or adding a new one sees exactly what ships. ``output_media_ids`` is
+    always a list (empty on failure or when the output node produced nothing). The
+    legacy ``pipeline`` / ``output_media_id`` keys are kept alongside for existing
+    consumers."""
+    _publish("protobanana.pipeline.run.done", {
+        "run_id": run_id, "pipeline": pipeline, "pipeline_id": pipeline,
+        "status": status, "output_media_id": output_media_id,
+        "output_media_ids": [output_media_id] if output_media_id else [],
+    })

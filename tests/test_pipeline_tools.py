@@ -155,6 +155,44 @@ def test_disabled_plugin_pipelines_are_not_exposed(tmp_path, monkeypatch):
     assert mod.pipelines.save_pipeline(SPEC)["source"] == "saved"
 
 
+def test_factory_uses_passed_config_not_stale_live_config(tmp_path, monkeypatch):
+    # During a settings reload the host builds the new graph — running the late-tool
+    # factories — BEFORE it publishes the new config as STATE.graph_config, so the
+    # live config sdk.config() returns is still the OLD one at factory time. The
+    # enable gate must read the config PASSED to the factory, not the live one:
+    # otherwise a just-disabled plugin keeps its pipeline_<id> tools and a
+    # just-enabled plugin's are missing until some later rebuild.
+    mod, reg = _load(tmp_path / "data")
+    # Not author-enabled, so a config is the ONLY thing that can turn it on — which
+    # makes "live config vs passed config" the sole variable under test.
+    _ship(monkeypatch, tmp_path, SPEC, enabled=False)
+    factory = reg.late_tool_factories[0]
+
+    def stale_live(enabled_ids):
+        # Stand in for the host's live config during the reload window.
+        monkeypatch.setattr(
+            sys.modules["graph.sdk"], "config",
+            lambda: SimpleNamespace(plugins_enabled=list(enabled_ids), plugins_disabled=[]))
+
+    # Reload ENABLES the plugin: the live (old) config still omits it, but the new
+    # config passed to the factory lists it → the tool appears on THIS build.
+    stale_live([])
+    on = SimpleNamespace(plugins_enabled=["campaign"], plugins_disabled=[])
+    assert [t.name for t in factory(reg.tools, on)] == ["pipeline_test_render"]
+    assert SPEC["id"] in {p["id"] for p in mod.pipelines.list_pipelines(on)}
+    assert mod.pipelines.load_pipeline(SPEC["id"], on) == SPEC
+
+    # Reload DISABLES the plugin: the live (old) config still lists it, but the new
+    # config passed to the factory disables it → the tool drops on THIS build.
+    # Reading the stale live config (the bug) would wrongly keep it.
+    stale_live(["campaign"])
+    off = SimpleNamespace(plugins_enabled=[], plugins_disabled=["campaign"])
+    assert factory(reg.tools, off) == []
+    assert SPEC["id"] not in {p["id"] for p in mod.pipelines.list_pipelines(off)}
+    with pytest.raises(mod.pipelines.SpecError, match="no pipeline named"):
+        mod.pipelines.load_pipeline(SPEC["id"], off)
+
+
 def test_saved_pipeline_shadows_a_colliding_shipped_id(tmp_path, monkeypatch):
     mod, _ = _load(tmp_path / "data")
     # The user saves their own pipeline first...
@@ -213,7 +251,11 @@ def test_collisions_and_factory_errors_are_isolated(tmp_path, caplog, monkeypatc
 def test_manifest_events_and_version():
     manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "protoagent.plugin.yaml").read_text())
     assert {"protobanana.pipeline.saved", "protobanana.pipeline.run.done"} <= set(manifest["emits"])
-    assert manifest["version"] == "0.7.0"
+    # S9a ships at the 0.7.0 floor without a bump of its own; a minimum check (not an
+    # exact pin) so a later release's version bump does not break this unrelated test
+    # — the same rule tests/test_manifest.py documents.
+    version = tuple(int(p) for p in str(manifest["version"]).split("."))
+    assert version >= (0, 7, 0)
     assert manifest["capabilities"]["network"] == []
 
 

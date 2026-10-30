@@ -507,19 +507,19 @@ textarea {
 
 .g-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 @media (max-width: 880px) {
   .g-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 480px) {
   .g-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -636,7 +636,8 @@ textarea {
 }
 
 .g-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -755,3 +756,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .field input[type="checkbox"] { width: 20px; height: 20px; align-self: flex-start; }
 .lineage-node button[aria-pressed="true"] { border-color: var(--accent); }
 input[type="range"], input[type="checkbox"] { accent-color: var(--accent); }
+
+.g-actions .g-send { grid-column: 1 / -1; }
+.gallery > * { min-width: 0; }

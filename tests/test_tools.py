@@ -299,3 +299,47 @@ def test_json_error_detail_is_kept(plugin, monkeypatch):
     monkeypatch.setattr(mod.client, "generate", boom)
     out = run(mod.tools.generate_image.ainvoke({"prompt": "a red fox"}))
     assert out == "Error: gateway returned 400: invalid size '0x0'"
+
+
+@pytest.mark.parametrize("name,args", [
+    ("generate_image", {"prompt": "fox"}),
+    ("edit_image", {"image_ref": OPAQUE_URL, "prompt": "blue"}),
+    ("identity_edit", {"image_ref": OPAQUE_URL, "prompt": "blue"}),
+    ("region_edit", {"image_ref": OPAQUE_URL, "region": "fox", "prompt": "blue"}),
+    ("remove_background", {"image_ref": OPAQUE_URL}),
+    ("compose_images", {"image_refs": [OPAQUE_URL, OPAQUE_URL], "prompt": "combine"}),
+    ("outpaint_image", {"image_ref": OPAQUE_URL, "prompt": "sky", "left": 64}),
+    ("inpaint_image", {"image_ref": OPAQUE_URL, "mask_ref": DATA_URL, "prompt": "blue"}),
+])
+@pytest.mark.parametrize("show_model", [True, False])
+def test_each_tool_attaches_reference_chip(plugin, monkeypatch, name, args, show_model):
+    mod, reg = plugin
+    mod.tools.CFG["show_model"] = show_model
+    marker = "\x1e[component-v1]"
+    monkeypatch.setattr(sys.modules["graph.sdk"], "encode_component",
+                        lambda kind, props: marker + json.dumps({"component": kind, "props": props}),
+                        raising=False)
+
+    async def image(*args, **kwargs):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGBA", (1, 1), (0, 0, 255, 255)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    for method in ("generate", "edit", "chat_compose"):
+        monkeypatch.setattr(mod.client, method, image)
+    out = run(getattr(mod.tools, name).ainvoke(args))
+    text = json.loads(out[len(SENTINEL):])["text"] if out.startswith(SENTINEL) else out
+    payload = json.loads(text.split(marker)[1])
+    assert payload == {"component": "protobanana-ref",
+                       "props": {"media_id": f"fake-media-{len(reg.saved_media)}"}}
+    assert reg.components["protobanana-ref"](payload["props"]) is None
+    assert reg.component_frames["protobanana-ref"] == "studio/ref.html"
+
+
+@pytest.mark.parametrize("props", [{}, {"media_id": "../bad"}, {"media_id": "x" * 201},
+                                   {"media_id": 1}, {"media_id": "ok", "content": "no"}, None])
+def test_reference_chip_rejects_non_pointer_props(plugin, props):
+    _, reg = plugin
+    assert reg.components["protobanana-ref"](props)

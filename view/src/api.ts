@@ -81,7 +81,20 @@ let _ready: Promise<ViewContext> | null = null;
 export function ready(): Promise<ViewContext> {
   if (_ready) return _ready;
   _ready = (async () => {
-    _kit = await waitForKit();
+    const base = location.pathname.split("/plugins/")[0];
+    if (!resolveKit().initPluginView && location.pathname.includes("/plugins/")) {
+      try {
+        const kit = await import(/* @vite-ignore */ `${base}/_ds/plugin-kit.js`);
+        _kit = {
+          apiFetch: (path, init) => kit.apiFetch(`/${API_ROOT}/${path}`, init),
+          apiUrl: path => kit.apiUrl(`/${API_ROOT}/${path}`),
+          initPluginView: () => new Promise<ViewContext>(resolve => kit.initPluginView((ctx: ViewContext) => {
+            applyTheme(ctx.theme);
+            resolve(ctx);
+          })),
+        };
+      } catch { _kit = await waitForKit(); }
+    } else { _kit = await waitForKit(); }
     try {
       _ctx = _kit.initPluginView ? ((await _kit.initPluginView()) as ViewContext) || {} : {};
     } catch {
@@ -318,4 +331,25 @@ export function rerunParams(rec: HistoryRecord): Record<string, unknown> {
   const locked = typeof seed === "number" && seed >= 0;
   if (!locked) params.seed = Math.floor(Math.random() * 2 ** 31);
   return params;
+}
+
+/** Draft only: the host opens its composer; the operator decides when to send. */
+export function composeText(rec: Pick<HistoryRecord, "media_id" | "op" | "params">): string {
+  const prefix = `Image ${rec.media_id} (${rec.op}, seed ${rec.params.seed ?? "unknown"}, prompt "`;
+  const suffix = '"): ';
+  const encoder = new TextEncoder();
+  let budget = 4096 - encoder.encode(prefix + suffix).length;
+  let prompt = "";
+  for (const char of String(rec.params.prompt ?? "")) {
+    const bytes = encoder.encode(char).length;
+    if (bytes > budget) break;
+    prompt += char;
+    budget -= bytes;
+  }
+  return prefix + prompt + suffix;
+}
+
+export function sendToAgent(rec: HistoryRecord): void {
+  window.parent.postMessage({ type: "protoagent:chat:compose", text: composeText(rec) },
+    location.ancestorOrigins?.[0] || location.origin);
 }

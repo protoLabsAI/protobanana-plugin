@@ -33,7 +33,7 @@ def test_dist_index_loads_the_ds_plugin_kit():
     its fixed host path, kept root-absolute so it resolves regardless of slug."""
     html = _index_html()
     assert '<link rel="stylesheet" href="/_ds/plugin-kit.css">' in html
-    assert '/_ds/plugin-kit.js' in html and 'defer' in html
+    assert '/_ds/plugin-kit.js' in (SRC / 'api.ts').read_text()
     # The backend route test also asserts this title is served.
     assert "<title>protoBanana Studio</title>" in html
 
@@ -49,7 +49,7 @@ def test_dist_bundle_assets_are_relative_not_root_absolute():
     for ref in bundle:
         assert ref.startswith("./assets/"), f"bundle asset must be relative: {ref!r}"
     # The kit, by contrast, is intentionally root-absolute.
-    assert any(r == "/_ds/plugin-kit.js" for r in refs)
+    assert any(r == "/_ds/plugin-kit.js" for r in refs)  # preloaded as an ES module
     assert not any(r.startswith("/assets/") for r in refs), "root-absolute bundle asset breaks the slug prefix"
 
 
@@ -145,3 +145,13 @@ def test_committed_build_is_fresh_against_source():
     entry = re.search(r'src="(\./assets/index-[^"]+\.js)"', html)
     assert entry, "no hashed entry in index.html"
     assert (DIST / entry.group(1).lstrip("./")).is_file()
+
+
+def test_reference_chip_is_built_and_uses_the_nonce_bound_bridge():
+    chip = (DIST / "ref.html").read_text()
+    assert chip == (VIEW / "public" / "ref.html").read_text()
+    assert "protoComponent:openView" in chip
+    assert "protoComponent:ready" in chip
+    assert "protoComponent:init" in chip
+    assert "protoComponent:bridgeResult" in chip
+    assert "protobanana:focus" in chip

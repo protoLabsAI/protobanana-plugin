@@ -15,10 +15,9 @@ function injectPluginKit(): Plugin {
         return {
           html,
           tags: [
-            // head-prepend so the kit loads ahead of the app module; api.ts also
-            // polls for the global, so render is robust to script ordering.
+            // api.ts imports the host ES module and starts the ready handshake.
             { tag: "link", injectTo: "head-prepend", attrs: { rel: "stylesheet", href: "/_ds/plugin-kit.css" } },
-            { tag: "script", injectTo: "head-prepend", attrs: { src: "/_ds/plugin-kit.js", defer: true } },
+            { tag: "link", injectTo: "head-prepend", attrs: { rel: "modulepreload", href: "/_ds/plugin-kit.js" } },
           ],
         };
       },

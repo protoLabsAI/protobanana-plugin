@@ -48,6 +48,19 @@ def configure(registry) -> None:
     CFG.update(_DEFAULTS)
     CFG.update({k: v for k, v in dict(getattr(registry, "config", {}) or {}).items() if v is not None})
     client.configure(CFG)
+    register_component = getattr(registry, "register_component", None)
+    if register_component:
+        register_component("protobanana-ref", validate_ref, frame="studio/ref.html")
+
+
+def validate_ref(props) -> str | None:
+    """Keep transcript props a bounded media pointer, never image content."""
+    if not isinstance(props, dict) or set(props) != {"media_id"}:
+        return "media_id required"
+    value = props["media_id"]
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value):
+        return "invalid media_id"
+    return None
 
 
 def get_tools() -> list:
@@ -186,6 +199,12 @@ def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
         f"![{alt}]({ref.url})\n\n"
         f"Pass `{ref.id}` as the image reference to edit this result further."
     )
+    try:
+        from graph.sdk import encode_component
+
+        text += "\n" + encode_component("protobanana-ref", {"media_id": ref.id})
+    except ImportError:
+        pass  # Older hosts still get the image and readable media reference.
     if CFG.get("show_model", True):
         try:
             from graph.sdk import multimodal_tool_result

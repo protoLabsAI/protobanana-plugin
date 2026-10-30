@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Open in Studio</title>
+<style>
+body { margin: 8px; font: 13px system-ui; color: var(--pl-text, #ddd); background: var(--pl-bg, #25252b); }
+button { font: inherit; padding: 6px 10px; cursor: pointer; } code { overflow-wrap: anywhere; }
+p { margin: 6px 0; }
+</style>
+<code id="media"></code> <button id="open" disabled>Open in Studio</button>
+<p id="hint" role="status">Open Studio from the navigation and find this media id if your host cannot open it here.</p>
+<script>
+let nonce, mediaId, cid = 0, pending;
+const button = document.getElementById('open');
+const hint = document.getElementById('hint');
+window.addEventListener('message', event => {
+  if (event.source !== parent) return;
+  const m = event.data || {};
+  if (m.type === 'protoComponent:init' && !nonce) {
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(m.props?.media_id || '')) return;
+    mediaId = m.props.media_id;
+    document.getElementById('media').textContent = mediaId;
+    nonce = m.nonce;
+    button.disabled = !nonce;
+    parent.postMessage({ type: 'protoComponent:height', height: document.body.scrollHeight + 16 }, '*');
+  } else if (m.type === 'protoComponent:bridgeResult' && m.cid === cid) {
+    clearTimeout(pending);
+    button.disabled = false;
+    hint.textContent = m.ok ? 'Opened in Studio.' : (m.error || 'Open Studio from the navigation and find this media id.');
+  }
+});
+button.addEventListener('click', () => {
+  button.disabled = true;
+  parent.postMessage({ type: 'protoComponent:openView', cid: ++cid, nonce,
+    view: 'studio', message: { type: 'protobanana:focus', focus: mediaId } }, '*');
+  pending = setTimeout(() => {
+    button.hidden = true;
+    hint.textContent = 'This host cannot open Studio from a chip. Open Studio from the navigation and find this media id.';
+  }, 2500);
+});
+parent.postMessage({ type: 'protoComponent:ready', pair: new URLSearchParams(location.hash.slice(1)).get('pair') }, '*');
+</script></html>

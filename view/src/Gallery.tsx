@@ -98,6 +98,8 @@ function Tile({
           type="button"
           className="g-thumb"
           onClick={onSelect}
+          role="option"
+          aria-selected={selected}
           aria-current={selected || undefined}
           aria-label={name}
         >
@@ -276,7 +278,12 @@ export function Gallery({
         )
       ) : (
         <>
-          <div className="g-grid">
+          <div className="g-grid" role="listbox" aria-label="History images" onKeyDown={e => {
+            const options = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+            const index = options.indexOf(document.activeElement as HTMLButtonElement);
+            const next = e.key === "Home" ? 0 : e.key === "End" ? options.length - 1 : e.key === "ArrowRight" ? index + 1 : e.key === "ArrowLeft" ? index - 1 : e.key === "ArrowDown" ? index + 3 : e.key === "ArrowUp" ? index - 3 : null;
+            if (next !== null) { e.preventDefault(); options[Math.max(0, Math.min(options.length - 1, next))]?.focus(); }
+          }}>
             {records.map((rec) => (
               <Tile
                 key={`${rec.media_id}-${rec.job_id ?? ""}`}

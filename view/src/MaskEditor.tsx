@@ -149,7 +149,7 @@ export function MaskEditor({ source, onChange, geom, box, panLock, onNatural }: 
       </div>
       <label>Brush size (source px)<Slider ariaLabel="Brush size" min={1} max={300} value={size} onChange={setSize} /></label>
       <label>Feather (source px)<Slider ariaLabel="Feather" min={0} max={50} value={feather} onChange={setFeather} /></label>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="status">{error}</p>}
     </fieldset>
   </>;
 }

@@ -1,5 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import type { HistoryRecord } from "./api";
+import { Compare } from "./Compare";
 import type { EditMode } from "./ActionBar";
 import type { Margins } from "./Composer";
 import { MaskEditor } from "./MaskEditor";
@@ -11,6 +13,9 @@ import {
   FullscreenIcon,
   ImagesIcon,
   Lightbox,
+  Popover,
+  MoreIcon,
+  useToast,
   Skeleton,
   Tooltip,
   ZoomInIcon,
@@ -35,7 +40,8 @@ function cls(...parts: (string | false | undefined)[]): string {
 
 // The hand-built floating view toolbar (design §7). Token-only styles, raised bg,
 // every control named (aria-label + Tooltip). It shows ONLY with an image.
-function ViewToolbar({ pct, onOut, onIn, onHundred, onFit, onFull }: {
+function ViewToolbar({ pct, onOut, onIn, onHundred, onFit, onFull, extra }: {
+  extra: ReactNode;
   pct: number;
   onOut: () => void;
   onIn: () => void;
@@ -60,6 +66,7 @@ function ViewToolbar({ pct, onOut, onIn, onHundred, onFit, onFull }: {
       <Tooltip label="Fullscreen">
         <Button size="xs" icon variant="ghost" aria-label="Fullscreen" onClick={onFull}><FullscreenIcon /></Button>
       </Tooltip>
+      {extra}
     </div>
   );
 }
@@ -78,6 +85,8 @@ export function StageView({
   prunedSelected,
   unreachable,
   current,
+  parent,
+  record,
   editRef,
   mode,
   dimmed,
@@ -92,6 +101,8 @@ export function StageView({
   prunedSelected: boolean;
   unreachable: boolean;
   current?: string;
+  parent?: string;
+  record?: HistoryRecord;
   editRef: string;
   mode: EditMode;
   dimmed: boolean;
@@ -101,6 +112,8 @@ export function StageView({
   onUpload: () => void;
   overlay: ReactNode;
 }) {
+  const [comparing, setComparing] = useState(false);
+  const toast = useToast();
   const [view, setView] = useState<View>(FIT_VIEW);
   const [nat, setNat] = useState<{ iw: number; ih: number }>();
   const [box, setBox] = useState<{ W: number; H: number }>();
@@ -128,6 +141,7 @@ export function StageView({
   useEffect(() => {
     setView(FIT_VIEW);
     setLightbox(false);
+    setComparing(false);
   }, [current, editRef, mode]);
 
   // Natural size is a property of the IMAGE, not the mode: only clear it when the
@@ -290,7 +304,8 @@ export function StageView({
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
           >
-            {surface()}
+            {comparing && parent && !inMode ? <Compare key={editRef} parent={<img className="stage-img" src={parent} alt="Parent image" draggable={false}
+              style={geom ? { transform: containTransform(geom), transformOrigin: "0 0" } : undefined} />}>{surface()}</Compare> : surface()}
           </div>
           {(geom || outpaint) && (
             <ViewToolbar
@@ -300,6 +315,25 @@ export function StageView({
               onHundred={() => (outpaint ? setView({ zoom: 1, panX: 0, panY: 0 }) : hundred())}
               onFit={fit}
               onFull={() => setLightbox(true)}
+              extra={<>
+                {parent && <Tooltip label="Compare to parent"><Button size="xs" variant="ghost" aria-label="Compare to parent" aria-pressed={comparing}
+                  disabled={inMode} onClick={() => setComparing(v => !v)}>Compare</Button></Tooltip>}
+                <Popover label="Image info" align="end" trigger={({ toggle, open }) => <Tooltip label="Image info">
+                  <Button size="xs" icon variant="ghost" aria-label="Image info" aria-expanded={open} onClick={toggle}><MoreIcon /></Button>
+                </Tooltip>}>
+                  <div className="image-info">
+                    <dl><dt>Alias</dt><dd>{record?.alias || "Unknown"}</dd>
+                      <dt>Model id</dt><dd>{String(record?.params.model_id || record?.params.model || "Not recorded")}</dd>
+                      <dt>Media id</dt><dd>{record?.media_id || "Uploaded image"}</dd></dl>
+                    <pre>{JSON.stringify(record?.params || {}, null, 2)}</pre>
+                    <Tooltip label="Copy params"><Button size="xs" aria-label="Copy params" onClick={async () => {
+                      try { await navigator.clipboard.writeText(JSON.stringify(record?.params || {}, null, 2)); toast("Parameters copied"); }
+                      catch { toast("Could not copy parameters"); }
+                    }}>Copy params</Button></Tooltip>
+                    <Tooltip label="Open in new tab"><Button size="xs" aria-label="Open in new tab" onClick={() => { if (current) window.open(current, "_blank", "noopener,noreferrer"); }}>Open in new tab</Button></Tooltip>
+                  </div>
+                </Popover>
+              </>}
             />
           )}
           <Lightbox open={lightbox} src={current} alt="Current image" onClose={() => setLightbox(false)} />

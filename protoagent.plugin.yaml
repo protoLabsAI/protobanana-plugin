@@ -35,10 +35,16 @@ public_paths:
 
 # Completion events for the Studio view (and other consumers) on the core event
 # bus (ADR 0039). Renders submitted from the view are jobs; the view subscribes
-# through the plugin kit, keeping it off the 20 s fleet read lane.
+# through the plugin kit, keeping it off the 20 s fleet read lane. S7 pipelines
+# add per-node progress and run/save events for the same reason (a run is a job).
 emits:
   - protobanana.job.done
   - protobanana.job.failed
+  - protobanana.pipeline.node.started
+  - protobanana.pipeline.node.done
+  - protobanana.pipeline.node.failed
+  - protobanana.pipeline.run.done
+  - protobanana.pipeline.saved
 
 # Pillow (not declared in requires_pip — the frozen desktop runtime refuses
 # plugins with non-bundled pip deps, protoAgent#1631). It is a hard dependency

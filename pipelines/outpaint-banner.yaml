@@ -1,0 +1,21 @@
+# Widen an image into a banner by extending its left and right edges (outpaint).
+id: outpaint-banner
+name: Outpaint banner
+description: >-
+  Extend an image's left and right edges into a wide banner, continuing the
+  scene seamlessly.
+inputs:
+  art: image
+  prompt: { type: text, default: "extend the scene seamlessly, same style and lighting" }
+steps:
+  - id: wide
+    op: outpaint
+    image: art
+    params:
+      prompt: "{{inputs.prompt}}"
+      left: 384
+      right: 384
+output: wide
+ui:
+  positions:
+    wide: [0, 0]

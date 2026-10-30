@@ -11,6 +11,13 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/api/plugins/protobanana/history``     GET a cursor page (op/source/starred) (gated)
 - ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
 - ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
+- ``/api/plugins/protobanana/pipelines``        GET saved + starter pipelines; POST save one (gated)
+- ``/api/plugins/protobanana/pipelines/<id>/run``  POST a run, returns a run_id at once (gated)
+- ``/api/plugins/protobanana/runs/<id>``        GET one run's per-node state (gated)
+
+Like ``POST /jobs``, ``POST /pipelines/<id>/run`` returns a ``run_id`` without
+awaiting the run (the DAG runs in a background task; per-node completion arrives
+on the bus), so it too stays clear of the fleet proxy's 20 s read lane.
 
 No route holds a request open while a render runs: ``POST /jobs`` returns a
 ``job_id`` in well under a second (it never awaits the render; completion
@@ -27,7 +34,7 @@ import). Evaluating annotations eagerly keeps the real classes on the handlers.
 
 from pathlib import Path
 
-from . import catalog, history, jobs
+from . import catalog, history, jobs, pipelines
 
 _API = "/api/plugins/protobanana"
 _PAGE = "/plugins/protobanana/studio"
@@ -109,6 +116,10 @@ def build_router(registry):
         alias: str | None = None
         operator: str = "default"
 
+    class RunRequest(BaseModel):
+        inputs: dict = {}
+        operator: str = "default"
+
     @router.get(f"{_PAGE}/ref.html")
     async def reference_chip():
         return FileResponse(view_dir / "ref.html", media_type="text/html")
@@ -179,6 +190,50 @@ def build_router(registry):
         if raw is None:
             raise HTTPException(status_code=404, detail="media not available (pruned)")
         return Response(content=raw, media_type="image/png")
+
+    # ---- pipelines (S7): spec, DAG runner, run state -----------------------
+    @router.get(f"{_API}/pipelines")
+    async def get_pipelines():  # noqa: ANN202
+        """The saved + starter pipelines the Studio can run (summaries)."""
+        return {"pipelines": pipelines.list_pipelines()}
+
+    @router.post(f"{_API}/pipelines")
+    async def save_pipeline_route(spec: dict):  # noqa: ANN202
+        """Validate and save a pipeline spec. A 400 with the readable validation
+        error (cycle / unknown op / dangling ref / port type mismatch) on reject."""
+        try:
+            return pipelines.save_pipeline(spec)
+        except pipelines.SpecError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.post(f"{_API}/pipelines/{{pipeline_id}}/run")
+    async def run_pipeline_route(pipeline_id: str, req: RunRequest):  # noqa: ANN202
+        """Queue a pipeline run; respond with its ``run_id`` WITHOUT awaiting the
+        run (the DAG runs in a background task; per-node completion lands on the
+        bus), so the request never nears the 20 s fleet read lane (design R1)."""
+        try:
+            run_id = pipelines.start_run(pipeline_id, req.inputs, operator=req.operator)
+        except pipelines.SpecError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return JSONResponse({"run_id": run_id}, status_code=202)
+
+    @router.get(f"{_API}/runs/{{run_id}}")
+    async def get_run_route(run_id: str):  # noqa: ANN202
+        """One run's per-node state. Server-side, so it survives a view reload."""
+        state = pipelines.get_run(run_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        return state
+
+    @router.post(f"{_API}/runs/{{run_id}}/resume")
+    async def resume_run_route(run_id: str, from_step: str | None = None):  # noqa: ANN202
+        """Re-run from the first unfinished node (or ``from_step``), reusing the
+        cache for finished steps — "re-run from here" after a recoverable 524."""
+        ok = pipelines.resume_run(run_id, from_step=from_step)
+        if not ok:
+            raise HTTPException(status_code=409,
+                                detail="run is unknown or still running")
+        return JSONResponse({"run_id": run_id, "resumed": True}, status_code=202)
 
     # ---- public page + assets ---------------------------------------------
     # Serve the page at the manifest path AND at its trailing-slash form: the

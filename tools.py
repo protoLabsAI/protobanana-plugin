@@ -63,7 +63,8 @@ def validate_ref(props) -> str | None:
 
 def get_tools() -> list:
     return [generate_image, edit_image, region_edit,
-            remove_background, compose_images, outpaint_image, inpaint_image]
+            remove_background, compose_images, outpaint_image, inpaint_image,
+            list_pipelines, run_pipeline, save_pipeline]
 
 
 # ---------------------------------------------------------------- helpers
@@ -478,5 +479,133 @@ async def inpaint_image(image_ref: str, mask_ref: str, prompt: str, seed: int = 
         return _finish(raw, _caption(prompt, "Inpaint: "),
                        {"tool": "inpaint_image", "model": CFG["inpaint_model"],
                         "image": image_ref, "mask": ref.id, "prompt": prompt, "seed": seed})
+    except Exception as e:
+        return _err(e)
+
+
+# ------------------------------------------------------------- pipeline tools
+
+@tool
+async def list_pipelines() -> str:
+    """List the saved and starter image pipelines you can run with run_pipeline.
+
+    A pipeline chains several image operations (generate, edit, region edit,
+    background removal, compose, outpaint) into one re-runnable recipe — use it
+    when the user wants a repeatable multi-step result (e.g. a product sticker:
+    generate, clean the label, cut out the background). Returns one line per
+    pipeline with its id, where it came from, and the inputs it expects, or a
+    note that none are available.
+    """
+    try:
+        from . import pipelines
+
+        items = pipelines.list_pipelines()
+        if not items:
+            return ("No image pipelines are available. Author one with save_pipeline, "
+                    "or install a plugin that ships starters in its pipelines/ dir.")
+        lines = []
+        for p in items:
+            decls = p.get("inputs") or {}
+            ins = ", ".join(f"{name} ({pipelines._input_type(decl)})"
+                            for name, decl in decls.items()) or "none"
+            lines.append(f"- `{p['id']}` ({p['source']}): {p.get('name')} — "
+                         f"inputs: {ins}; {len(p.get('steps') or [])} steps")
+        return "Available image pipelines:\n" + "\n".join(lines)
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+async def run_pipeline(name: str, inputs: dict | None = None) -> str:
+    """Run a saved or starter image pipeline end to end and return its final image.
+
+    Use this to produce a repeatable multi-step result the user asked for. Call
+    list_pipelines first to see the ids and the inputs each one expects.
+
+    Args:
+        name: The pipeline id (from list_pipelines).
+        inputs: A mapping of the pipeline's declared inputs to values — text for
+            text inputs, and an image reference (media id, /media/ URL, data URL,
+            or path) for image inputs. Inputs with a default may be omitted.
+    Runs every step through the gateway, caching unchanged steps, and returns
+    markdown with the output image and its media id, or a readable error (a
+    recoverable gateway timeout says the run can simply be re-run to resume).
+    """
+    try:
+        from . import pipelines
+
+        run_inputs = inputs if isinstance(inputs, dict) else {}
+        try:
+            run_id = pipelines.start_run(name, run_inputs)
+        except pipelines.SpecError as e:
+            return f"Error: {e}"
+        run = await pipelines.wait(run_id)
+        if run is None:
+            return "Error: the pipeline run could not be read back after it finished."
+        if run.get("status") == "failed":
+            node = next((n for n in run.get("nodes", {}).values()
+                         if n.get("status") == "failed"), None)
+            step = node.get("id") if node else "?"
+            if node and node.get("recoverable"):
+                return (f"Error: pipeline step `{step}` hit a recoverable gateway timeout "
+                        f"({node.get('error')}). {node.get('hint') or ''} Re-run the pipeline "
+                        f"to resume from that step — finished steps are served from the cache.")
+            return f"Error: pipeline run failed at step `{step}`: {run.get('error')}"
+        out = run.get("output")
+        node = run.get("nodes", {}).get(out, {})
+        media_id, url = node.get("media_id"), node.get("url")
+        steps = ", ".join(f"{sid} (cached)" if run["nodes"][sid].get("cached") else sid
+                          for sid in run.get("order", []))
+        text = (f"Ran pipeline `{run.get('pipeline')}` (run {run_id}): "
+                f"{len(run.get('order') or [])} steps [{steps}]. Output saved as `{media_id}`.\n\n")
+        if url:
+            text += ("To show the user the image, include this markdown line VERBATIM in "
+                     f"your reply:\n![{run.get('pipeline')} output]({url})\n\n")
+        text += f"Pass `{media_id}` as the image reference to edit this result further."
+        try:
+            from graph.sdk import encode_component
+
+            if media_id:
+                text += "\n" + encode_component("protobanana-ref", {"media_id": media_id})
+        except ImportError:
+            pass
+        raw = pipelines.output_bytes(run_id)
+        if raw and CFG.get("show_model", True):
+            try:
+                from graph.sdk import multimodal_tool_result
+
+                return multimodal_tool_result(text, images=[{"b64": base64.b64encode(raw).decode(),
+                                                             "mime": "image/png"}])
+            except (ValueError, ImportError):
+                pass
+        return text
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+async def save_pipeline(spec: dict) -> str:
+    """Validate and save an image pipeline so it can be run later with run_pipeline.
+
+    A spec is a mapping with an `id`, optional `inputs` (name -> type, where a
+    type is text/image/mask/int/seed), a list of `steps` (each `{id, op, image or
+    mask or images reference, params}`), and an `output` step id. Steps wire
+    together by referencing an earlier step's id or a declared input. The spec is
+    validated before saving — a cycle, an unknown op, a reference to nothing, or
+    an image wired into a text port is rejected with a readable error.
+
+    Args:
+        spec: The pipeline spec mapping (or a YAML/JSON string of one).
+    Returns a confirmation with the saved id, or a readable validation error.
+    """
+    try:
+        from . import pipelines
+
+        try:
+            saved = pipelines.save_pipeline(spec)
+        except pipelines.SpecError as e:
+            return f"Error: invalid pipeline — {e}"
+        return (f"Saved pipeline `{saved['id']}`. Run it with "
+                f"run_pipeline(name=\"{saved['id']}\", inputs=...).")
     except Exception as e:
         return _err(e)

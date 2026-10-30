@@ -1,0 +1,20 @@
+# Restage a person's photo into a new scene while keeping their likeness. Takes
+# an image input (the photo) and a text scene; edit_image keeps the face.
+id: portrait-restage
+name: Portrait restage
+description: >-
+  Restage a person's photo in a new scene, keeping their face and likeness.
+inputs:
+  photo: image
+  scene: { type: text, default: "on a sunlit city street at golden hour" }
+steps:
+  - id: restage
+    op: edit
+    image: photo
+    params:
+      prompt: "restage this person {{inputs.scene}}; keep their face, hair and likeness"
+      keep_transparency: false
+output: restage
+ui:
+  positions:
+    restage: [0, 0]

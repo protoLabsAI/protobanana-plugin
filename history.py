@@ -248,6 +248,35 @@ def record_studio(state: dict, media_id: str) -> None:
         log.exception("[protobanana] record_studio failed")
 
 
+def record_pipeline(media_id: str, *, run_id: str, pipeline: str | None, step: str,
+                    op: str | None, alias: str | None, params: dict | None,
+                    parent_id: str | None) -> None:
+    """Write a ``source="pipeline"`` record for one step's output (design §3.2:
+    "each intermediate is saved to media and history, with pipeline_run_id").
+
+    The record carries ``pipeline_run_id`` and ``step`` so the gallery can group a
+    run's intermediates, and the same ``{op, alias, params}`` shape as the other
+    sources so filters and lineage work unchanged. Best-effort, like
+    :func:`record_agent`: a history write must never break a run."""
+    try:
+        append({
+            "media_id": media_id,
+            "parent_id": parent_id,
+            "op": op,
+            "alias": alias,
+            "params": params or {},
+            "source": "pipeline",
+            "job_id": None,
+            "pipeline": pipeline,
+            "pipeline_run_id": run_id,
+            "step": step,
+            "created": time.time(),
+            "starred": False,
+        })
+    except Exception:  # noqa: BLE001
+        log.exception("[protobanana] record_pipeline failed")
+
+
 # -------------------------------------------------------------- star / unstar
 
 def star(media_id: str) -> bool:

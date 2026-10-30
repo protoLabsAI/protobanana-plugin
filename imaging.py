@@ -466,7 +466,11 @@ def unchanged(before: bytes, after: bytes) -> bool:
 
 
 def validate_mask(raw: bytes, source: bytes) -> bytes:
-    """Require source-sized alpha masks; transparent pixels are edited."""
+    """Require a source-sized mask and return it as RGBA, transparent = edit.
+
+    Two conventions are accepted, matching the gateway (protoBanana #47):
+    an alpha mask (transparent = edit, opaque = preserve), or an opaque
+    black/white mask (white = edit, black = preserve), converted here."""
     from PIL import Image
 
     with Image.open(io.BytesIO(source)) as image, Image.open(io.BytesIO(raw)) as mask:
@@ -474,12 +478,15 @@ def validate_mask(raw: bytes, source: bytes) -> bytes:
             raise ValueError(
                 f"Mask size {mask.width}x{mask.height} must match source "
                 f"{image.width}x{image.height}.")
-        if "A" not in mask.getbands() and "transparency" not in mask.info:
-            raise ValueError("Mask must have transparency: transparent = edit, opaque = preserve; "
-                             "opaque black/white masks are not supported.")
-        rgba = mask.convert("RGBA")
+        if "A" in mask.getbands() or "transparency" in mask.info:
+            rgba = mask.convert("RGBA")
+        else:
+            keep = mask.convert("L").point(lambda v: 0 if v > 127 else 255)
+            rgba = Image.new("RGBA", mask.size, (0, 0, 0, 255))
+            rgba.putalpha(keep)
         if rgba.getchannel("A").getextrema()[0] == 255:
-            raise ValueError("Mask has no edit region: transparent = edit, opaque = preserve.")
+            raise ValueError("Mask has no edit region: transparent (or white, on an opaque "
+                             "black/white mask) = edit.")
         output = io.BytesIO()
         rgba.save(output, format="PNG")
         return output.getvalue()

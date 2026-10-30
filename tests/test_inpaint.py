@@ -15,8 +15,8 @@ from _plugin_testkit import FakeRegistry, install_host_stubs, load_plugin
 install_host_stubs()
 
 
-def png(size=(32, 24), mode="RGBA", alpha=255):
-    image = Image.new(mode, size, (255, 255, 255, alpha) if mode == "RGBA" else "white")
+def png(size=(32, 24), mode="RGBA", alpha=255, fill="white"):
+    image = Image.new(mode, size, (255, 255, 255, alpha) if mode == "RGBA" else fill)
     if mode == "RGBA" and alpha != 255:
         image.putpixel((0, 0), (255, 255, 255, 255))
     out = io.BytesIO()
@@ -130,7 +130,7 @@ def test_config_inpaint_model_routes_both_surfaces(tmp_path, monkeypatch, surfac
 
 @pytest.mark.parametrize("mask,message", [
     (png(size=(4, 4), alpha=0), "must match source"),
-    (png(mode="RGB"), "transparent = edit"),
+    (png(mode="L", fill=0), "no edit region"),
     (png(), "no edit region"),
     (b"broken", "Error"),
 ])
@@ -158,3 +158,17 @@ def test_invalid_mask_never_calls_gateway(plugin, monkeypatch, mask, message, su
         assert not reg.saved_media
 
     asyncio.run(scenario())
+
+
+def test_black_white_mask_is_converted_white_is_edit(plugin):
+    """An opaque black/white mask (white = edit) is accepted, as the gateway
+    accepts it, and converted to the transparent = edit convention."""
+    mod, _ = plugin
+    mask = Image.new("L", (32, 24), 0)
+    mask.paste(255, (0, 0, 16, 24))  # left half white = edit
+    out = io.BytesIO()
+    mask.save(out, "PNG")
+    rgba = Image.open(io.BytesIO(mod.imaging.validate_mask(out.getvalue(), png())))
+    assert rgba.mode == "RGBA"
+    assert rgba.getpixel((2, 2))[3] == 0      # white → transparent → edited
+    assert rgba.getpixel((30, 2))[3] == 255   # black → opaque → preserved

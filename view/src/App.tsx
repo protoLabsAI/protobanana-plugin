@@ -228,7 +228,7 @@ export function App() {
     <header className="topbar"><span className="dot" /><h1>protoBanana Studio</h1><span className="spacer" /><span className="hint">Playground</span></header>
     <aside className="pane left">
       <label className="field">Operation<select aria-label="Operation" value={op} onChange={e => setOp(e.target.value)}>
-        {(catalog || []).filter(e => e.op !== "inpaint").map(e => <option key={e.op} value={e.op}>{e.label}</option>)}
+        {(catalog || []).map(e => <option key={e.op} value={e.op}>{e.label}</option>)}
       </select></label>
       {error && <p role="alert">{error}</p>}
       {entry ? <OpForm key={entry.op} entry={entry} current={selected?.media_id} records={records} params={params} setParams={setParams}

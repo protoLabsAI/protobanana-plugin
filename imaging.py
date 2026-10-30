@@ -463,3 +463,23 @@ def unchanged(before: bytes, after: bytes) -> bool:
         return moved < _UNCHANGED_FRACTION * a.size[0] * a.size[1]
     except Exception:  # noqa: BLE001 — a failed check must never fail the tool
         return False
+
+
+def validate_mask(raw: bytes, source: bytes) -> bytes:
+    """Require source-sized alpha masks; transparent pixels are edited."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(source)) as image, Image.open(io.BytesIO(raw)) as mask:
+        if mask.size != image.size:
+            raise ValueError(
+                f"Mask size {mask.width}x{mask.height} must match source "
+                f"{image.width}x{image.height}.")
+        if "A" not in mask.getbands() and "transparency" not in mask.info:
+            raise ValueError("Mask must have transparency: transparent = edit, opaque = preserve; "
+                             "opaque black/white masks are not supported.")
+        rgba = mask.convert("RGBA")
+        if rgba.getchannel("A").getextrema()[0] == 255:
+            raise ValueError("Mask has no edit region: transparent = edit, opaque = preserve.")
+        output = io.BytesIO()
+        rgba.save(output, format="PNG")
+        return output.getvalue()

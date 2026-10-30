@@ -373,7 +373,7 @@ def test_inpaint_mask_keeps_transparency(plugin, monkeypatch):
 
     async def scenario():
         await _task(mod, mod.jobs.submit(
-            "inpaint", {"image": _data_url(PNG_1x1), "mask": _data_url(_transparent_png()),
+            "inpaint", {"image": _data_url(_transparent_png()), "mask": _data_url(_transparent_png()),
                         "prompt": "a cat", "negative_prompt": "dog"}))
         rec = calls[0]
         assert rec["mask"] is not None

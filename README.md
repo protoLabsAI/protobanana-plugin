@@ -5,13 +5,14 @@ backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway 
 ComfyUI workflows (Qwen-Image-2.1, Krea 2 identity edit, SAM 3 region edit, BiRefNet)
 behind LiteLLM.
 
-The agent gets seven tools; every result is persisted to the core media store, renders
+The agent gets eight tools; every result is persisted to the core media store, renders
 inline in chat, and — on a vision model — is attached to the tool result so the agent can
 **see** what it just made and iterate (generate → look → refine).
 
 | Tool | Route | Use |
 |---|---|---|
 | `generate_image` | `/images/generations` | Text-to-image — `draft: true` routes to the 8-step Qwen-Image-2.1 Turbo tier (~10s vs ~32s warm) for rapid prototyping |
+| `inpaint_image` | `/images/edits` (+mask) | Paint or supply a source-sized alpha mask: transparent = edit, opaque = preserve |
 | `edit_image` | `/images/edits` | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
 | `identity_edit` | `/images/edits` (krea2 stems) | Face/identity-preserving edits — single-ref, or scene + person two-ref |
 | `region_edit` | `/images/edits` (+`grounding`) | Change one object, leave the rest untouched |

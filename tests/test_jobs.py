@@ -24,6 +24,33 @@ PNG_1x1 = base64.b64decode(
 )
 
 
+def _data_url(raw: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(raw).decode()
+
+
+def _transparent_png() -> bytes:
+    """A 4x4 PNG with real transparency — used as an inpaint mask so a test can
+    prove the region signal (the alpha channel) survives to the gateway."""
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGBA", (4, 4), (255, 0, 0, 0))  # fully transparent red
+    img.putpixel((0, 0), (255, 0, 0, 255))  # one opaque pixel → partial alpha
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _edit_recorder(store):
+    """Stub for client.edit that records its call and returns a 1x1 PNG."""
+    async def edit(model, prompt, image, *, fields=None, mask=None):
+        store.append({"model": model, "prompt": prompt, "image": image,
+                      "fields": dict(fields or {}), "mask": mask})
+        return PNG_1x1
+    return edit
+
+
 def _load(config=None):
     """Fresh plugin + FakeRegistry (plugin_dir set so the view route resolves)."""
     mod = load_plugin(PLUGIN_ROOT, "protobanana")
@@ -266,6 +293,172 @@ def test_jobs_ring_is_bounded(plugin):
     assert len(mod.jobs._jobs) == mod.jobs._MAX_JOBS
 
 
+def test_save_media_failure_publishes_failed(plugin, monkeypatch):
+    """A save_media that raises must still fail the job and publish job.failed —
+    the render succeeded, so without this the job would hang 'running' forever."""
+    mod, reg = plugin
+
+    async def ok_generate(model, prompt, size, **kw):
+        return PNG_1x1
+
+    def boom_save(*a, **kw):
+        raise RuntimeError("media store full")
+
+    monkeypatch.setattr(mod.client, "generate", ok_generate)
+    monkeypatch.setattr(reg, "save_media", boom_save)
+
+    async def scenario():
+        job_id = mod.jobs.submit("generate", {"prompt": "x"})
+        await _task(mod, job_id)
+        st = mod.jobs.get_state(job_id)
+        assert st["status"] == "failed"
+        assert st["error_kind"] == "error" and st["recoverable"] is False
+        assert "media store full" in st["error"]
+        failed = [d for t, d in reg.emitted if t == "protobanana.job.failed"]
+        assert failed and failed[0]["job_id"] == job_id
+        assert "protobanana.job.done" not in [t for t, _ in reg.emitted]
+
+    asyncio.run(scenario())
+
+
+# ------------------------------------------------------------- dispatch paths
+
+
+def test_generate_snaps_and_clamps_size(plugin, monkeypatch):
+    """Studio generate snaps to the 16px grid and clamps to 256–2048 (and takes
+    a × separator) exactly as the agent tool, not the raw user string."""
+    mod, _ = plugin
+    seen = {}
+
+    async def fake_generate(model, prompt, size, **kw):
+        seen["size"] = size
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "generate", fake_generate)
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit("generate", {"prompt": "x", "size": "1000×1000"}))
+        assert seen["size"] == "1008x1008"  # 1000 → nearest multiple of 16, × ok
+        await _task(mod, mod.jobs.submit("generate", {"prompt": "x", "size": "50x5000"}))
+        assert seen["size"] == "256x2048"  # clamped to the 256–2048 bounds
+
+    asyncio.run(scenario())
+
+
+def test_edit_forwards_negative_prompt(plugin, monkeypatch):
+    mod, _ = plugin
+    calls = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit(
+            "edit", {"image": _data_url(PNG_1x1), "prompt": "make it night",
+                     "negative_prompt": "blurry", "seed": 3}))
+        assert calls and calls[0]["fields"]["negative_prompt"] == "blurry"
+        assert calls[0]["fields"]["seed"] == 3
+
+    asyncio.run(scenario())
+
+
+def test_inpaint_mask_keeps_transparency(plugin, monkeypatch):
+    """The inpaint mask reaches the gateway with its alpha intact (transparent =
+    the region to edit); it must NOT be flattened onto white like the base image."""
+    import io
+
+    from PIL import Image
+
+    mod, _ = plugin
+    calls = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit(
+            "inpaint", {"image": _data_url(PNG_1x1), "mask": _data_url(_transparent_png()),
+                        "prompt": "a cat", "negative_prompt": "dog"}))
+        rec = calls[0]
+        assert rec["mask"] is not None
+        mask_img = Image.open(io.BytesIO(rec["mask"]))
+        assert mask_img.mode == "RGBA"  # alpha preserved, not flattened to RGB
+        assert mask_img.getchannel("A").getextrema()[0] == 0  # still transparent
+        # the base image, by contrast, is flattened (no alpha carried through)
+        assert Image.open(io.BytesIO(rec["image"])).mode in ("RGB", "P", "L")
+        assert rec["fields"]["negative_prompt"] == "dog"
+
+    asyncio.run(scenario())
+
+
+def test_identity_realism_selects_realism_alias(plugin, monkeypatch):
+    """The identity Realism checkbox switches to realism_identity_model, matching
+    tools.identity_edit — tier/override alone never reaches the realism model."""
+    mod, reg = plugin
+    calls = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
+
+    async def scenario():
+        j1 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her",
+                                          "realism": True})
+        await _task(mod, j1)
+        assert mod.jobs.get_state(j1)["alias"] == "protolabs/krea2-identity-edit-realism"
+        assert calls[0]["model"] == "protolabs/krea2-identity-edit-realism"
+        assert reg.saved_media[0][2]["alias"] == "protolabs/krea2-identity-edit-realism"
+
+        j2 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her"})
+        await _task(mod, j2)
+        assert mod.jobs.get_state(j2)["alias"] == "protolabs/krea2-identity-edit"
+
+        # an explicit alias override still wins over the checkbox
+        j3 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her",
+                                          "realism": True}, alias="protolabs/custom")
+        await _task(mod, j3)
+        assert mod.jobs.get_state(j3)["alias"] == "protolabs/custom"
+
+    asyncio.run(scenario())
+
+
+def test_region_edit_and_outpaint_dispatch(plugin, monkeypatch):
+    mod, _ = plugin
+    calls = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit(
+            "region_edit", {"image": _data_url(PNG_1x1), "grounding": "the red car",
+                            "prompt": "blue", "seed": 1}))
+        assert calls[0]["model"] == "protolabs/qwen-image-region-edit"
+        assert calls[0]["fields"]["grounding"] == "the red car"
+
+        await _task(mod, mod.jobs.submit(
+            "outpaint", {"image": _data_url(PNG_1x1), "left": 64, "right": 64}))
+        assert calls[1]["model"] == "protolabs/qwen-image-outpaint"
+        assert calls[1]["fields"]["left"] == 64 and calls[1]["fields"]["bottom"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_remove_background_and_compose_dispatch(plugin, monkeypatch):
+    mod, _ = plugin
+    edits = []
+    composes = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(edits))
+
+    async def fake_compose(model, prompt, images):
+        composes.append({"model": model, "prompt": prompt, "n": len(images)})
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "chat_compose", fake_compose)
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit("remove_background", {"image": _data_url(PNG_1x1)}))
+        assert edits[0]["model"] == "protolabs/qwen-image-bgremove"
+        assert edits[0]["prompt"] == "remove background"
+
+        await _task(mod, mod.jobs.submit(
+            "compose", {"images": [_data_url(PNG_1x1), _data_url(PNG_1x1)], "prompt": "combine"}))
+        assert composes[0]["model"] == "protolabs/qwen-image-chat" and composes[0]["n"] == 2
+
+    asyncio.run(scenario())
+
+
 # ----------------------------------------------------------------- catalog
 
 
@@ -290,6 +483,25 @@ def test_catalog_aliases_follow_config(plugin):
     cat = mod.catalog_static.build_catalog({"gen_model": "protolabs/my-gen"})
     gen = next(e for e in cat if e["op"] == "generate")
     assert gen["aliases"]["final"] == "protolabs/my-gen"
+
+
+def test_catalog_defaults_come_from_tools_defaults(plugin):
+    """The catalog's literal fallbacks are tools._DEFAULTS, not a copy — so a
+    default changed in tools.py can't leave the catalog on a stale alias."""
+    mod, _ = plugin
+    cat = mod.catalog_static.build_catalog({})
+    ident = next(e for e in cat if e["op"] == "identity")
+    assert ident["aliases"]["final"] == mod.tools._DEFAULTS["identity_model"]
+    assert ident["aliases"]["realism"] == mod.tools._DEFAULTS["realism_identity_model"]
+
+
+def test_identity_grounding_px_schema_is_valid(plugin):
+    """The documented default must satisfy its own minimum/maximum, or any form
+    built from the catalog rejects the default value."""
+    mod, _ = plugin
+    cat = mod.catalog_static.build_catalog({})
+    gp = next(e for e in cat if e["op"] == "identity")["params"]["properties"]["grounding_px"]
+    assert gp["minimum"] <= gp["default"] <= gp["maximum"]
 
 
 # -------------------------------------------------------------- asset guard

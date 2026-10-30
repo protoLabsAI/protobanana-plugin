@@ -143,7 +143,13 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
     """
     params = dict(params or {})
     tier = tier or "final"
-    resolved = catalog_static.alias_for(_cfg, op, tier, alias or params.get("alias"))
+    override = alias or params.get("alias")
+    resolved = catalog_static.alias_for(_cfg, op, tier, override)
+    # The identity "Realism" checkbox is a selectable alias, not a tier (design
+    # §1.2): with no explicit override it picks the realism-LoRA variant, exactly
+    # as tools.identity_edit switches to realism_identity_model.
+    if op == "identity" and not override and params.get("realism"):
+        resolved = catalog_static.alias_for(_cfg, op, "realism")
     job_id = uuid.uuid4().hex
     locked = _lock_for(operator).locked()
     st = {
@@ -187,7 +193,14 @@ async def _run(job_id: str) -> None:
         while True:
             attempts += 1
             try:
+                # The gateway call AND the persist both live inside the try: if
+                # save_media raises, the task must still mark the job failed and
+                # publish job.failed, or the Studio view waits forever.
                 raw = await _dispatch(st)
+                meta = {"source": "studio", "op": st["op"], "alias": st.get("alias"),
+                        "params": st["params"], "parent_id": st.get("parent_id"),
+                        "job_id": job_id}
+                ref = _registry.save_media(raw, "image/png", meta)
             except Exception as exc:  # noqa: BLE001 - classified into a job result
                 fail = classify(exc, alias=st.get("alias"))
                 retry_on = bool(_cfg.get("studio_retry_on_524"))
@@ -205,10 +218,6 @@ async def _run(job_id: str) -> None:
                 })
                 return
             # success
-            meta = {"source": "studio", "op": st["op"], "alias": st.get("alias"),
-                    "params": st["params"], "parent_id": st.get("parent_id"),
-                    "job_id": job_id}
-            ref = _registry.save_media(raw, "image/png", meta)
             elapsed = round(time.monotonic() - started, 2)
             st.update(status="done", media_id=ref.id, url=getattr(ref, "url", None),
                       elapsed_s=elapsed)
@@ -222,6 +231,7 @@ async def _run(job_id: str) -> None:
 async def _dispatch(st: dict) -> bytes:
     """Run one gateway call for the op — the SAME client.py functions the tools
     use. Returns the rendered PNG bytes."""
+    from . import tools
     op = st["op"]
     params = st["params"]
     alias = st["alias"]
@@ -230,8 +240,11 @@ async def _dispatch(st: dict) -> bytes:
     seed = _seed(params.get("seed"))
 
     if op == "generate":
-        size = params.get("size") or _cfg.get("default_size") or "1024x1024"
-        return await client.generate(alias, params.get("prompt", ""), size, seed=seed,
+        # Snap to the 16px grid and clamp to 256–2048 (accepting ×/* separators)
+        # exactly as tools.generate_image does, so the gateway gets a size it can
+        # honour instead of guessing one from the prompt (client.py comment).
+        w, h = tools._snap_size(params.get("size") or _cfg.get("default_size") or "1024x1024")
+        return await client.generate(alias, params.get("prompt", ""), f"{w}x{h}", seed=seed,
                                      negative_prompt=params.get("negative_prompt") or None)
     if op == "remove_background":
         return await client.edit(alias, "remove background", _image(params["image"]))
@@ -243,12 +256,18 @@ async def _dispatch(st: dict) -> bytes:
     # Remaining ops ride /images/edits with op-specific form fields.
     image = _image(params["image"])
     if op == "edit":
-        return await client.edit(alias, params.get("prompt", ""), image, fields={"seed": seed})
+        return await client.edit(alias, params.get("prompt", ""), image,
+                                 fields={"seed": seed,
+                                         "negative_prompt": params.get("negative_prompt") or None})
     if op == "inpaint":
+        # The mask's transparency IS the signal (transparent = the region to
+        # edit), so it must NOT go through _image()/imaging.prepare, which
+        # flattens alpha onto white — that would erase the region mark. Resolve
+        # it with its alpha intact.
         return await client.edit(alias, params.get("prompt", ""), image,
                                  fields={"seed": seed,
                                          "negative_prompt": params.get("negative_prompt") or None},
-                                 mask=_image(params["mask"]))
+                                 mask=_mask(params["mask"]))
     if op == "region_edit":
         return await client.edit(alias, params.get("prompt", ""), image,
                                  fields={"grounding": params.get("grounding") or params.get("region"),
@@ -282,6 +301,17 @@ def _image(ref: str) -> bytes:
     path): flatten transparency onto white so ComfyUI's LoadImage keeps it."""
     from . import imaging, tools
     return imaging.prepare(tools._resolve_image(ref)).data
+
+
+def _mask(ref: str) -> bytes:
+    """Resolve an inpaint mask WITHOUT flattening its transparency.
+
+    The mask's alpha is the region signal (transparent = the region to edit),
+    so — unlike _image() — it must not be composited onto white. Re-encode to a
+    lossless PNG with the alpha kept, whatever format the reference arrived in,
+    so the gateway always gets a PNG mask that still carries the region mark."""
+    from . import imaging, tools
+    return imaging.to_png(tools._resolve_image(ref))
 
 
 def _person_data_url(ref: str) -> str:

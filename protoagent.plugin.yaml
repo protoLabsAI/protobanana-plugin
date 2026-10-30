@@ -64,6 +64,7 @@ config:
   timeout_s: 300
   show_model: true     # attach results via multimodal_tool_result (#1930) so a vision model sees them
   studio_retry_on_524: false   # off by default: a 524 means the ComfyUI job is still running, so an auto-retry would stack a second GPU job (protoBanana#52)
+  studio_retry_backoff_s: 2    # seconds to wait before the single retry (only when studio_retry_on_524 is true)
 
 settings:
   - { key: gen_model, label: "Text-to-image model", type: string, description: "Gateway alias for /images/generations (must exist in the gateway's model_list)." }

@@ -25,46 +25,29 @@ from __future__ import annotations
 # view clamps the WxH control to the same bounds.
 _SIZE_MIN, _SIZE_MAX, _SIZE_STEP = 256, 2048, 16
 
-# ``op`` → tier → (config key, literal default). The literal default mirrors
-# tools._DEFAULTS so the catalog resolves a real alias even when a test's
-# config omits the key (and when the static schema is used host-free). Ops with
-# no distilled "draft" variant point both tiers at the same alias.
-_ALIASES: dict[str, dict[str, tuple[str | None, str]]] = {
-    "generate": {
-        "draft": ("fast_gen_model", "protolabs/qwen-image-2-1-turbo"),
-        "final": ("gen_model", "protolabs/qwen-image"),
-    },
-    "edit": {
-        "draft": ("fast_edit_model", "protolabs/qwen-image-edit-turbo"),
-        "final": ("edit_model", "protolabs/qwen-image-edit"),
-    },
-    "inpaint": {
-        # No plugin config key yet (design §1.1 gap); the gateway stem is fixed.
-        "draft": (None, "protolabs/qwen-image-inpaint"),
-        "final": (None, "protolabs/qwen-image-inpaint"),
-    },
-    "region_edit": {
-        "draft": ("region_model", "protolabs/qwen-image-region-edit"),
-        "final": ("region_model", "protolabs/qwen-image-region-edit"),
-    },
+# Inpaint has no plugin config key yet (design §1.1 gap); the gateway stem is
+# fixed, so its literal lives here rather than in tools._DEFAULTS.
+_INPAINT_ALIAS = "protolabs/qwen-image-inpaint"
+
+# ``op`` → tier → config key (``None`` for inpaint, which has no key). The
+# literal fallback for each key comes from tools._DEFAULTS (imported lazily, see
+# _default_alias) so changing a default in tools.py can't leave the Studio
+# catalog and runner on a stale alias. Ops with no distilled "draft" variant
+# point both tiers at the same key.
+_ALIASES: dict[str, dict[str, str | None]] = {
+    "generate": {"draft": "fast_gen_model", "final": "gen_model"},
+    "edit": {"draft": "fast_edit_model", "final": "edit_model"},
+    "inpaint": {"draft": None, "final": None},
+    "region_edit": {"draft": "region_model", "final": "region_model"},
     "identity": {
-        "draft": ("identity_model", "protolabs/krea2-identity-edit"),
-        "final": ("identity_model", "protolabs/krea2-identity-edit"),
+        "draft": "identity_model",
+        "final": "identity_model",
         # realism-LoRA variant — not a tier, but a selectable alias (design §1.2).
-        "realism": ("realism_identity_model", "protolabs/krea2-identity-edit-realism"),
+        "realism": "realism_identity_model",
     },
-    "outpaint": {
-        "draft": ("outpaint_model", "protolabs/qwen-image-outpaint"),
-        "final": ("outpaint_model", "protolabs/qwen-image-outpaint"),
-    },
-    "remove_background": {
-        "draft": ("bgremove_model", "protolabs/qwen-image-bgremove"),
-        "final": ("bgremove_model", "protolabs/qwen-image-bgremove"),
-    },
-    "compose": {
-        "draft": ("chat_model", "protolabs/qwen-image-chat"),
-        "final": ("chat_model", "protolabs/qwen-image-chat"),
-    },
+    "outpaint": {"draft": "outpaint_model", "final": "outpaint_model"},
+    "remove_background": {"draft": "bgremove_model", "final": "bgremove_model"},
+    "compose": {"draft": "chat_model", "final": "chat_model"},
 }
 
 # The order Studio shows ops in (design §3.1 left column). Also fixes the set of
@@ -126,8 +109,9 @@ _PARAMS: dict[str, dict] = {
                          "description": "Two-ref mode: the person to place into the scene."},
         "prompt": _PROMPT,
         "grounding_px": {"type": "integer", "title": "Grounding px", "default": 0,
-                         "minimum": 512, "maximum": 1536,
-                         "description": "0 = default 768. Higher favours facial likeness."},
+                         "minimum": 0, "maximum": 1536,
+                         "description": "0 = gateway default (768); otherwise 512–1536. "
+                                        "Higher favours facial likeness."},
         "seed": _SEED,
         "realism": {"type": "boolean", "title": "Realism", "default": False,
                     "description": "Realism-LoRA variant for photographic portraits."},
@@ -185,24 +169,38 @@ _META: dict[str, dict] = {
 }
 
 
+def _default_alias(key: str | None) -> str:
+    """The literal fallback for a config key — from tools._DEFAULTS (imported
+    lazily to keep this module host-free on import), so the single source of
+    truth for default model aliases stays tools._DEFAULTS. ``None`` (inpaint,
+    which has no config key) falls back to the fixed gateway stem."""
+    if key is None:
+        return _INPAINT_ALIAS
+    from . import tools
+    return tools._DEFAULTS.get(key, _INPAINT_ALIAS)
+
+
 def alias_for(cfg: dict, op: str, tier: str = "final", override: str | None = None) -> str | None:
     """Resolve the gateway alias for ``op`` at ``tier``.
 
     An explicit ``override`` (the view's "advanced alias" field) wins; otherwise
     the plugin config value for the tier's key, falling back to the literal
-    default. Returns ``None`` for an unknown op so the runner can fail readably.
+    default from tools._DEFAULTS. Returns ``None`` for an unknown op so the
+    runner can fail readably.
     """
     if override:
         return override
     tiers = _ALIASES.get(op)
     if not tiers:
         return None
-    key, default = tiers.get(tier) or tiers["final"]
+    # An unknown tier falls back to "final"; a known tier whose value is None
+    # (inpaint) keeps None → the fixed stem via _default_alias.
+    key = tiers.get(tier, tiers["final"])
     if key:
         val = cfg.get(key)
         if val:
             return val
-    return default
+    return _default_alias(key)
 
 
 def entry(cfg: dict, op: str) -> dict | None:

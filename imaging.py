@@ -68,6 +68,27 @@ def _to_png(img) -> bytes:
     return buf.getvalue()
 
 
+def to_png(raw: bytes) -> bytes:
+    """Re-encode to a lossless PNG, KEEPING any alpha channel (no flatten).
+
+    For an input whose transparency is the signal rather than an artefact — an
+    inpaint mask where transparent marks the region to edit — so it must not go
+    through ``prepare`` (which composites alpha onto white). Already-PNG bytes
+    pass through byte-for-byte; any other format is re-encoded preserving its
+    mode. A no-op (returns ``raw``) when Pillow can't be imported."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return raw
+    Image = _pil()
+    if Image is None:
+        return raw
+    try:
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+    except Exception:  # noqa: BLE001 — best-effort, never fail the caller
+        return raw
+    return _to_png(img)
+
+
 @dataclass
 class Prepared:
     """What was sent to the gateway, plus what we need to undo afterwards."""

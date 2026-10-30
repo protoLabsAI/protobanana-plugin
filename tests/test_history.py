@@ -293,15 +293,14 @@ def test_agent_image_records_are_rerunnable(env, monkeypatch):
     async def scenario():
         await mod.tools.edit_image.ainvoke({"image_ref": src, "prompt": "make it night"})
         await mod.tools.region_edit.ainvoke({"image_ref": src, "region": "the sky", "prompt": "red"})
-        await mod.tools.identity_edit.ainvoke({"image_ref": src, "prompt": "her", "person_ref": src})
         await mod.tools.remove_background.ainvoke({"image_ref": src})
         await mod.tools.compose_images.ainvoke({"image_refs": [src, src], "prompt": "combine"})
         await mod.tools.outpaint_image.ainvoke({"image_ref": src, "prompt": "more sky", "left": 64})
 
         by_op = {r["op"]: r for r in mod.history.read(limit=50)["records"]}
-        assert set(by_op) >= {"edit", "region_edit", "identity",
+        assert set(by_op) >= {"edit", "region_edit",
                               "remove_background", "compose", "outpaint"}
-        for op in ("edit", "region_edit", "identity", "remove_background", "outpaint"):
+        for op in ("edit", "region_edit", "remove_background", "outpaint"):
             assert by_op[op]["params"].get("image"), f"{op} record dropped its image ref"
         assert by_op["compose"]["params"].get("images"), "compose record kept no refs"
 
@@ -337,6 +336,8 @@ def test_agent_record_lineage_and_seed(env):
     })
 
     recs = {r["media_id"]: r for r in mod.history.read()["records"]}
+    # the retired chat alias is remapped so a Gallery re-run still resolves
+    assert recs["child3"]["alias"] == "protolabs/qwen-image-multiref"
     assert recs["child1"]["op"] == "edit" and recs["child1"]["alias"] == "protolabs/qwen-image-edit"
     assert recs["child1"]["parent_id"] == "parent-abc"      # lineage from the input ref
     assert recs["child1"]["params"]["image"] == "parent-abc"  # ref kept for re-run
@@ -485,3 +486,22 @@ def test_star_route_404_when_nothing_to_copy(env):
             assert r.status_code == 404
 
     asyncio.run(scenario())
+
+
+def test_retired_identity_records_file_under_edit(env):
+    """Krea identity_edit was retired; its old records stay filterable (and
+    re-runnable) as plain edits — new writes AND records already in the log."""
+    import json
+
+    mod = env.mod
+    assert mod.history._TOOL_OP["identity_edit"] == "edit"
+    mod.history.record_agent("m-new", {"tool": "identity_edit", "image": "x"})
+    with open(mod.history._history_file(), "a") as f:
+        f.write(json.dumps({"op": "identity", "media_id": "m-old", "source": "studio",
+                            "alias": "protolabs/krea2-identity-edit-realism",
+                            "params": {"image": "x"}}) + "\n")
+    ids = {r["media_id"] for r in mod.history.read(op="edit")["records"]}
+    assert {"m-new", "m-old"} <= ids
+    assert not mod.history.read(op="identity")["records"]
+    old = next(r for r in mod.history.read(op="edit")["records"] if r["media_id"] == "m-old")
+    assert old["alias"] == "protolabs/qwen-image-edit"  # re-run can't hit a retired alias

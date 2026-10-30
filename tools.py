@@ -29,12 +29,10 @@ _DEFAULTS = {
     "edit_model": "protolabs/qwen-image-edit",
     "inpaint_model": "protolabs/qwen-image-inpaint",
     "fast_edit_model": "protolabs/qwen-image-edit-turbo",
-    "chat_model": "protolabs/qwen-image-chat",
+    "compose_model": "protolabs/qwen-image-multiref",
     "bgremove_model": "protolabs/qwen-image-bgremove",
     "region_model": "protolabs/qwen-image-region-edit",
     "outpaint_model": "protolabs/qwen-image-outpaint",
-    "identity_model": "protolabs/krea2-identity-edit",
-    "realism_identity_model": "protolabs/krea2-identity-edit-realism",
     "default_size": "1024x1024",
     "timeout_s": 300,
     "show_model": True,
@@ -64,7 +62,7 @@ def validate_ref(props) -> str | None:
 
 
 def get_tools() -> list:
-    return [generate_image, edit_image, identity_edit, region_edit,
+    return [generate_image, edit_image, region_edit,
             remove_background, compose_images, outpaint_image, inpaint_image]
 
 
@@ -99,32 +97,6 @@ def _resolve_image(ref: str) -> bytes:
         return p.read_bytes()
     raise ValueError(f"can't resolve image reference {ref!r}")
 
-
-def _person_data_url(raw: bytes) -> str:
-    """Person ref → data URL small enough for the gateway's multipart cap.
-
-    The LiteLLM proxy rejects any non-file form part over 1024KB, and the
-    person ref rides a text field (data URL) because /v1/images/edits is
-    single-image by spec. The server caps the person ref to ~1MP anyway, so
-    shrinking client-side loses nothing."""
-    b64 = base64.b64encode(raw).decode()
-    if len(b64) <= 900_000:
-        return "data:image/png;base64," + b64
-    try:
-        import io
-
-        from PIL import Image
-
-        img = Image.open(io.BytesIO(raw)).convert("RGB")
-        img.thumbnail((1024, 1024))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
-        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-    except ImportError:
-        raise ValueError(
-            "person reference exceeds the gateway's 1MB form-part cap and Pillow "
-            "isn't installed to shrink it — run: protoagent plugin install-deps protobanana"
-        )
 
 
 def _dims(raw: bytes) -> str:
@@ -331,8 +303,10 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
     """Edit an existing image with a natural-language instruction.
 
     Good for global/semantic changes ("make it night", "turn the car red",
-    "watercolor style"). For changing ONE object precisely, prefer region_edit;
-    for keeping a person's face intact, prefer identity_edit.
+    "watercolor style") and for restyling or restaging a person ("put him on a
+    beach at sunset") — it keeps their face and likeness. For changing ONE
+    object precisely, prefer region_edit; to place a person from one photo into
+    another scene, use compose_images with both images.
 
     Args:
         image_ref: A media id from a previous result, a /media/ URL, a data: URL, or a file path.
@@ -360,61 +334,6 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
                        {"tool": "edit_image", "model": model, "image": image_ref,
                         "prompt": prompt, "seed": seed, "draft": draft,
                         "keep_transparency": keep_transparency}, note=note)
-    except Exception as e:
-        return _err(e)
-
-
-@tool
-async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
-                        grounding_px: int = 0, seed: int = -1, realism: bool = False) -> str:
-    """Edit or restage a photo while preserving a person's identity/likeness (Krea 2).
-
-    Two modes:
-    - Single-ref: image_ref is the person's photo; prompt restyles/restages them.
-    - Two-ref: image_ref is the SCENE, person_ref is the PERSON to place into it
-      (this ordering is load-bearing — swapping them degrades identity sharply).
-
-    Args:
-        image_ref: The photo to edit (single-ref) or the scene (two-ref).
-        prompt: The edit/staging instruction.
-        person_ref: The person's reference photo (two-ref mode only).
-        grounding_px: Quality dial 512–1536 (0 = default 768, which is right
-            for most edits). Lower favors the edit instruction; higher favors
-            facial likeness but can make the model drop the subject from busy
-            scenes — only raise it when likeness visibly needs the boost.
-            Always state the subject's role explicitly in the prompt (e.g.
-            "she is the foreground subject") when restaging into a new scene.
-        seed: Fixed seed; -1 = random.
-        realism: Set true when the subject is a human/portrait and the result
-            should look like a natural photograph — adds a realism adapter that
-            markedly improves face quality and skin texture. Leave false for
-            stylized/illustrated/non-photographic results.
-    Returns markdown with the result and its media id, or a readable error.
-    """
-    try:
-        fields: dict = {"seed": _seed(seed)}
-        if grounding_px:
-            fields["grounding_px"] = grounding_px
-        if person_ref.strip():
-            fields["person_image"] = _person_data_url(imaging.prepare(_resolve_image(person_ref)).data)
-        model = CFG["realism_identity_model"] if realism else CFG["identity_model"]
-        prep = imaging.prepare(_resolve_image(image_ref))
-        raw = await client.edit(model, prompt, prep.data, fields=fields)
-        # Restaging moves the subject, so the input's alpha no longer lines up:
-        # flatten-only (no black voids), keep the size when the shape held.
-        raw = imaging.finish_edit(raw, prep)
-        # Re-run record: keep the scene ref, the person ref (not the shrunk data
-        # URL — jobs._dispatch re-resolves it) and the quality dial so a Gallery
-        # re-run rebuilds the same two-ref/grounding call.
-        meta = {"tool": "identity_edit", "model": model, "image": image_ref,
-                "prompt": prompt, "seed": seed, "realism": realism,
-                "two_ref": bool(person_ref.strip())}
-        if person_ref.strip():
-            meta["person_image"] = person_ref
-        if grounding_px:
-            meta["grounding_px"] = grounding_px
-        return _finish(raw, _caption(prompt, "Edit: "), meta,
-                       note=_transparency_note(prep, False))
     except Exception as e:
         return _err(e)
 
@@ -487,18 +406,21 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
     Args:
         image_refs: 2–3 references (media ids, /media/ URLs, data: URLs, or paths).
         prompt: How to combine them — who/what goes where, style, setting.
+            Name the references by position: "the man from <image1> sitting
+            on the sofa in <image2>". This is also how to put a person into
+            another photo's scene while keeping their likeness.
     Returns markdown with the composition and its media id, or a readable error.
     """
     try:
         refs = [r for r in (image_refs or []) if str(r).strip()]
         if not 2 <= len(refs) <= 3:
             return f"Error: compose_images needs 2–3 image references, got {len(refs)}."
-        raw = await client.chat_compose(CFG["chat_model"], prompt,
+        raw = await client.chat_compose(CFG["compose_model"], prompt,
                                         [imaging.prepare(_resolve_image(r)).data for r in refs])
         # Keep the actual refs (not just their count) so a Gallery re-run of a
         # compose record feeds jobs._dispatch the images again (design §3.1 / S2).
         return _finish(raw, _caption(prompt, "Composite: "),
-                       {"tool": "compose_images", "model": CFG["chat_model"],
+                       {"tool": "compose_images", "model": CFG["compose_model"],
                         "images": refs, "prompt": prompt})
     except Exception as e:
         return _err(e)

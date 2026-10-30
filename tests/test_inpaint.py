@@ -65,9 +65,12 @@ def test_multipart_and_saved_mask_lineage(plugin, monkeypatch, surface):
             assert mod.jobs.get_state(job)["status"] == "done"
         request = captured[0]
         assert request.url.path == "/images/edits"
-        assert b'name="mask"; filename="mask.png"' in request.content
+        # The mask rides the mask_image data-URL field: the gateway drops an
+        # OpenAI `mask` file before custom providers (protoBanana #54).
+        assert b'name="mask_image"' in request.content
+        assert b'name="mask";' not in request.content
         assert b'name="image"; filename="image.png"' in request.content
-        assert mask in request.content
+        assert base64.b64encode(mask) in request.content
         assert b"protolabs/qwen-image-inpaint" in request.content
         assert len(reg.saved_media) == 2
         saved = Image.open(io.BytesIO(reg.saved_media[0][0]))

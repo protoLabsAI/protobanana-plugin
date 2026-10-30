@@ -387,34 +387,6 @@ def test_inpaint_mask_keeps_transparency(plugin, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_identity_realism_selects_realism_alias(plugin, monkeypatch):
-    """The identity Realism checkbox switches to realism_identity_model, matching
-    tools.identity_edit — tier/override alone never reaches the realism model."""
-    mod, reg = plugin
-    calls = []
-    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
-
-    async def scenario():
-        j1 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her",
-                                          "realism": True})
-        await _task(mod, j1)
-        assert mod.jobs.get_state(j1)["alias"] == "protolabs/krea2-identity-edit-realism"
-        assert calls[0]["model"] == "protolabs/krea2-identity-edit-realism"
-        assert reg.saved_media[0][2]["alias"] == "protolabs/krea2-identity-edit-realism"
-
-        j2 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her"})
-        await _task(mod, j2)
-        assert mod.jobs.get_state(j2)["alias"] == "protolabs/krea2-identity-edit"
-
-        # an explicit alias override still wins over the checkbox
-        j3 = mod.jobs.submit("identity", {"image": _data_url(PNG_1x1), "prompt": "her",
-                                          "realism": True}, alias="protolabs/custom")
-        await _task(mod, j3)
-        assert mod.jobs.get_state(j3)["alias"] == "protolabs/custom"
-
-    asyncio.run(scenario())
-
-
 def test_region_edit_and_outpaint_dispatch(plugin, monkeypatch):
     mod, _ = plugin
     calls = []
@@ -454,7 +426,7 @@ def test_remove_background_and_compose_dispatch(plugin, monkeypatch):
 
         await _task(mod, mod.jobs.submit(
             "compose", {"images": [_data_url(PNG_1x1), _data_url(PNG_1x1)], "prompt": "combine"}))
-        assert composes[0]["model"] == "protolabs/qwen-image-chat" and composes[0]["n"] == 2
+        assert composes[0]["model"] == "protolabs/qwen-image-multiref" and composes[0]["n"] == 2
 
     asyncio.run(scenario())
 
@@ -462,20 +434,20 @@ def test_remove_background_and_compose_dispatch(plugin, monkeypatch):
 # ----------------------------------------------------------------- catalog
 
 
-def test_catalog_has_all_eight_ops(plugin):
+def test_catalog_has_all_seven_ops(plugin):
     mod, _ = plugin
     cat = mod.catalog_static.build_catalog({})
-    assert len(cat) == 8
+    assert len(cat) == 7
     assert {e["op"] for e in cat} == {
-        "generate", "edit", "inpaint", "region_edit", "identity",
+        "generate", "edit", "inpaint", "region_edit",
         "outpaint", "remove_background", "compose"}
     gen = next(e for e in cat if e["op"] == "generate")
     assert gen["aliases"]["final"] == "protolabs/qwen-image"
     assert gen["aliases"]["draft"] == "protolabs/qwen-image-2-1-turbo"
     assert "prompt" in gen["params"]["properties"]
     assert gen["params"]["required"] == ["prompt"]
-    rmbg = next(e for e in cat if e["op"] == "remove_background")
-    assert rmbg["licence"]["non_commercial"] is True  # RMBG is CC BY-NC
+    bgremove = next(e for e in cat if e["op"] == "remove_background")
+    assert bgremove["licence"]["non_commercial"] is False  # BiRefNet is MIT
 
 
 def test_catalog_aliases_follow_config(plugin):
@@ -490,18 +462,9 @@ def test_catalog_defaults_come_from_tools_defaults(plugin):
     default changed in tools.py can't leave the catalog on a stale alias."""
     mod, _ = plugin
     cat = mod.catalog_static.build_catalog({})
-    ident = next(e for e in cat if e["op"] == "identity")
-    assert ident["aliases"]["final"] == mod.tools._DEFAULTS["identity_model"]
-    assert ident["aliases"]["realism"] == mod.tools._DEFAULTS["realism_identity_model"]
-
-
-def test_identity_grounding_px_schema_is_valid(plugin):
-    """The documented default must satisfy its own minimum/maximum, or any form
-    built from the catalog rejects the default value."""
-    mod, _ = plugin
-    cat = mod.catalog_static.build_catalog({})
-    gp = next(e for e in cat if e["op"] == "identity")["params"]["properties"]["grounding_px"]
-    assert gp["minimum"] <= gp["default"] <= gp["maximum"]
+    edit = next(e for e in cat if e["op"] == "edit")
+    assert edit["aliases"]["final"] == mod.tools._DEFAULTS["edit_model"]
+    assert edit["aliases"]["draft"] == mod.tools._DEFAULTS["fast_edit_model"]
 
 
 # -------------------------------------------------------------- asset guard
@@ -578,14 +541,14 @@ def test_post_jobs_responds_while_render_blocked(plugin, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_catalog_route_returns_eight_ops(plugin):
+def test_catalog_route_returns_seven_ops(plugin):
     mod, reg = plugin
 
     async def scenario():
         async with await _client(_app(reg)) as ac:
             r = await ac.get("/api/plugins/protobanana/catalog")
             assert r.status_code == 200
-            assert len(r.json()["ops"]) == 8
+            assert len(r.json()["ops"]) == 7
 
     asyncio.run(scenario())
 
@@ -653,7 +616,7 @@ def test_studio_page_base_makes_relative_assets_resolve(plugin):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("op", ["edit", "region_edit", "identity"])
+@pytest.mark.parametrize("op", ["edit", "region_edit"])
 @pytest.mark.parametrize("keep_transparency", [None, True, False])
 def test_studio_edit_restores_size_and_expected_alpha(plugin, monkeypatch, op, keep_transparency):
     import io
@@ -682,7 +645,7 @@ def test_studio_edit_restores_size_and_expected_alpha(plugin, monkeypatch, op, k
         assert mod.jobs.get_state(job_id)["status"] == "done"
         result = Image.open(io.BytesIO(reg.saved_media[-1][0]))
         assert result.size == (4, 4)
-        if op != "identity" and keep_transparency is not False:
+        if keep_transparency is not False:
             assert result.mode == "RGBA"
             assert result.getpixel((3, 3))[3] == 0
             assert result.getpixel((0, 0))[3] == 255
@@ -765,9 +728,6 @@ def test_generate_count_matches_single_image_contract(plugin, monkeypatch):
     ("generate", {}, "/images/generations"),
     ("edit", {"negative_prompt": "blur"}, "/images/edits"),
     ("region_edit", {"grounding": "shirt"}, "/images/edits"),
-    ("identity", {"grounding_px": 1024}, "/images/edits"),
-    ("identity", {"person_image": _data_url(_transparent_png()),
-                  "grounding_px": 768, "realism": True}, "/images/edits"),
     ("outpaint", {"left": 16, "top": 32, "right": 48, "bottom": 64}, "/images/edits"),
     ("remove_background", {}, "/images/edits"),
     ("compose", {"images": [_data_url(_transparent_png())] * 5}, "/chat/completions"),
@@ -815,13 +775,9 @@ def test_playground_dispatch_through_gateway(plugin, monkeypatch, op, extra, rou
             image = Image.open(io.BytesIO(payload["files"][0][1][1]))
             assert image.mode == "RGB"
             assert image.getpixel((3, 3)) == (255, 255, 255)
-            for key in ("grounding", "grounding_px", "left", "top", "right", "bottom"):
+            for key in ("grounding", "left", "top", "right", "bottom"):
                 if key in extra:
                     assert payload["data"][key] == str(extra[key])
-            if "person_image" in extra:
-                person = payload["data"]["person_image"].split(",")[1]
-                assert Image.open(io.BytesIO(base64.b64decode(person))).mode == "RGB"
-                assert "realism" in payload["data"]["model"]
         if op == "compose":
             assert len(payload["json"]["messages"][0]["content"]) == 6
         assert reg.saved_media[-1][2]["parent_id"] == "middle-node"

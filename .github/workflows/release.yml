@@ -9,6 +9,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The reusable workflow creates the tag + GitHub Release; a called workflow can only
+# narrow the caller's GITHUB_TOKEN, so write access is granted here.
+permissions:
+  contents: write
+
 jobs:
   release:
     if: >-
@@ -16,4 +21,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        startsWith(github.event.head_commit.message, 'chore: release v'))
     uses: protoLabsAI/release-tools/.github/workflows/plugin-release.yml@v2
+    # inherit, not a named list: plugin-release.yml uses DISCORD_RELEASE_WEBHOOK,
+    # GATEWAY_API_KEY and GH_PAT without declaring them under workflow_call.secrets,
+    # and GitHub only allows passing secrets by name when the callee declares them.
     secrets: inherit

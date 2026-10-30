@@ -71,6 +71,18 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 - `show_model: false` turns off attaching results to the model (text-only models degrade
   automatically either way; core caps attachments at 2 MiB/image).
 
+## Versions
+
+- **0.6.0** — protoBanana Studio Playground (Studio S1–S5): a background **job** API and
+  completion events, the Studio console view with a shared history/gallery, a Playground
+  running all single-image ops, mask painting with `inpaint_image`, and **Send to agent**
+  plus `protobanana-ref` reference chips. Requires protoAgent **>= 0.223.0**.
+- **0.5.0** — Krea `identity_edit` dropped (Qwen-Image-2.1 holds likeness as well, 3–4x
+  faster); inpaint masks are sent as `mask_image`.
+- **0.4.1** — readable gateway errors (502/503/504/524 as one plain sentence) and no-op
+  edit detection (a `region_edit`/`edit_image` that didn't change the image is reported
+  as an error).
+
 ## Tests
 
 ```bash

@@ -11,6 +11,7 @@ import {
   submitJob,
   subscribe,
 } from "./api";
+import { Gallery } from "./Gallery";
 
 // Poll GET /jobs/{id} as a FALLBACK for the bus (design R1 / card): short
 // requests, never a long-poll. Whichever of the bus event or a poll lands first
@@ -480,16 +481,7 @@ export function App() {
       </main>
 
       <aside className="pane right">
-        <h2 className="section-title">Gallery</h2>
-        <div className="gallery-ph" aria-hidden="true">
-          <div className="tile" />
-          <div className="tile" />
-          <div className="tile" />
-        </div>
-        <p className="hint">
-          The lineage gallery arrives in S2. Renders you make here already persist to the media store and will appear
-          then.
-        </p>
+        <Gallery catalog={catalog} onRerun={submit} />
       </aside>
     </div>
   );

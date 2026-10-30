@@ -234,3 +234,86 @@ export async function getJob(jobId: string): Promise<JobState | null> {
 export function mediaSrc(url: string | null | undefined): string {
   return url || "";
 }
+
+// ------------------------------------------------------------- shared history
+
+/** One row of the plugin-owned history index — shared by agent and Studio
+ *  renders (ADR 0039 / design §4). `starred` and `pruned` are live, server-side
+ *  truths: `starred` = a retention-proof copy exists; `pruned` = the store
+ *  original is gone and there is no copy (→ render a "pruned" tile). */
+export interface HistoryRecord {
+  media_id: string;
+  parent_id: string | null;
+  op: string;
+  alias: string | null;
+  params: Record<string, unknown>;
+  source: "agent" | "studio" | string;
+  job_id: string | null;
+  created: number | null;
+  starred: boolean;
+  pruned: boolean;
+}
+
+export interface HistoryPage {
+  records: HistoryRecord[];
+  next_cursor: number | null;
+}
+
+export interface HistoryFilters {
+  cursor?: number | null;
+  op?: string;
+  source?: string;
+  starred?: boolean;
+  limit?: number;
+}
+
+/** GET /history — a bounded, newest-first page with a cursor and filters. */
+export async function fetchHistory(f: HistoryFilters = {}): Promise<HistoryPage> {
+  const qs = new URLSearchParams();
+  if (f.cursor != null) qs.set("cursor", String(f.cursor));
+  if (f.op) qs.set("op", f.op);
+  if (f.source) qs.set("source", f.source);
+  if (typeof f.starred === "boolean") qs.set("starred", String(f.starred));
+  if (f.limit) qs.set("limit", String(f.limit));
+  const q = qs.toString();
+  const r = await apiFetch(`history${q ? `?${q}` : ""}`);
+  if (!r.ok) throw new Error(`history ${r.status}`);
+  const body = (await r.json()) as Partial<HistoryPage>;
+  return { records: body.records || [], next_cursor: body.next_cursor ?? null };
+}
+
+/** Fetch an item's bytes through the kit (bearer) and hand back an object URL.
+ *  The image route is GATED, so an <img src> can't reach it directly — we fetch
+ *  authorized and show a blob URL (which also powers download / open-in-new-tab).
+ *  Serves the store original, or the starred copy once the original is pruned. */
+export async function fetchHistoryImage(mediaId: string): Promise<string> {
+  const r = await apiFetch(`history/${encodeURIComponent(mediaId)}/image`);
+  if (!r.ok) throw new Error(`image ${r.status}`);
+  return URL.createObjectURL(await r.blob());
+}
+
+/** POST /history/{id}/star — copy the bytes into plugin data (retention-proof). */
+export async function starMedia(mediaId: string): Promise<boolean> {
+  const r = await apiFetch(`history/${encodeURIComponent(mediaId)}/star`, { method: "POST" });
+  if (!r.ok) throw new Error(`star ${r.status}`);
+  const b = (await r.json()) as { starred?: boolean };
+  return Boolean(b.starred);
+}
+
+/** POST /history/{id}/unstar — drop the plugin-data copy (idempotent). */
+export async function unstarMedia(mediaId: string): Promise<boolean> {
+  const r = await apiFetch(`history/${encodeURIComponent(mediaId)}/unstar`, { method: "POST" });
+  if (!r.ok) throw new Error(`unstar ${r.status}`);
+  return false;
+}
+
+/** Re-run params for a record: identical params, but a fresh random seed UNLESS
+ *  the stored seed is locked (>= 0). A locked seed is reproducible, so re-running
+ *  it resubmits identical params and reproduces the image (design §3.1 / S2). */
+export function rerunParams(rec: HistoryRecord): Record<string, unknown> {
+  const params = { ...rec.params };
+  const seed = params.seed;
+  const locked = typeof seed === "number" && seed >= 0;
+  if (!locked) params.seed = Math.floor(Math.random() * 2 ** 31);
+  return params;
+}

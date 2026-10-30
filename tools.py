@@ -18,7 +18,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import client, imaging
+from . import client, history, imaging
 
 _registry = None
 CFG: dict = {}
@@ -173,6 +173,10 @@ def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
     ``caption`` is the finished alt text (build it with ``_caption``); ``note``
     is appended to the first line (size/transparency caveats for the model)."""
     ref = _registry.save_media(raw, "image/png", meta)
+    # Shared history (design §4): this agent render joins the Studio gallery with
+    # source="agent". record_agent never raises — a history write must not break
+    # a tool call (tools return readable strings, never raise).
+    history.record_agent(ref.id, meta)
     alt = caption or "Generated image"
     text = (
         f"Done — {_dims(raw)} image saved as `{ref.id}`.{(' ' + note) if note else ''}\n\n"
@@ -289,9 +293,14 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
         want = _snap_size(size or CFG["default_size"])
         raw = await client.generate(model, prompt, f"{want[0]}x{want[1]}",
                                     seed=_seed(seed), negative_prompt=negative_prompt or None)
-        return _finish(raw, _caption(prompt), {"tool": "generate_image", "prompt": prompt,
-                                               "model": model, "draft": draft},
-                       note=_size_note(raw, want, "requested"))
+        # meta doubles as the shared-history re-run record: the resolved size and
+        # the seed are kept (in jobs._dispatch's param shape) so a Gallery re-run
+        # reproduces a locked-seed render (design §3.1 / S2).
+        meta = {"tool": "generate_image", "model": model, "prompt": prompt,
+                "size": f"{want[0]}x{want[1]}", "seed": seed, "draft": draft}
+        if negative_prompt:
+            meta["negative_prompt"] = negative_prompt
+        return _finish(raw, _caption(prompt), meta, note=_size_note(raw, want, "requested"))
     except Exception as e:
         return _err(e)
 
@@ -328,8 +337,9 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         note = " ".join(filter(None, (_transparency_note(prep, keep_transparency),
                                       _size_note(raw, prep.size, "the input was"))))
         return _finish(raw, _caption(prompt, "Edit: "),
-                       {"tool": "edit_image", "prompt": prompt, "source": image_ref,
-                        "model": model, "draft": draft}, note=note)
+                       {"tool": "edit_image", "model": model, "image": image_ref,
+                        "prompt": prompt, "seed": seed, "draft": draft,
+                        "keep_transparency": keep_transparency}, note=note)
     except Exception as e:
         return _err(e)
 
@@ -373,9 +383,17 @@ async def identity_edit(image_ref: str, prompt: str, person_ref: str = "",
         # Restaging moves the subject, so the input's alpha no longer lines up:
         # flatten-only (no black voids), keep the size when the shape held.
         raw = imaging.finish_edit(raw, prep)
-        return _finish(raw, _caption(prompt, "Edit: "),
-                       {"tool": "identity_edit", "prompt": prompt,
-                        "two_ref": bool(person_ref.strip()), "realism": realism},
+        # Re-run record: keep the scene ref, the person ref (not the shrunk data
+        # URL — jobs._dispatch re-resolves it) and the quality dial so a Gallery
+        # re-run rebuilds the same two-ref/grounding call.
+        meta = {"tool": "identity_edit", "model": model, "image": image_ref,
+                "prompt": prompt, "seed": seed, "realism": realism,
+                "two_ref": bool(person_ref.strip())}
+        if person_ref.strip():
+            meta["person_image"] = person_ref
+        if grounding_px:
+            meta["grounding_px"] = grounding_px
+        return _finish(raw, _caption(prompt, "Edit: "), meta,
                        note=_transparency_note(prep, False))
     except Exception as e:
         return _err(e)
@@ -406,7 +424,9 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
             return _NO_CHANGE_REGION.format(region=region)
         raw = imaging.finish_edit(raw, prep, keep_transparency=keep_transparency)
         return _finish(raw, _caption(f"{region} → {prompt}", "Edit: "),
-                       {"tool": "region_edit", "region": region, "prompt": prompt},
+                       {"tool": "region_edit", "model": CFG["region_model"],
+                        "image": image_ref, "region": region, "prompt": prompt,
+                        "seed": seed, "keep_transparency": keep_transparency},
                        note=_transparency_note(prep, keep_transparency))
     except Exception as e:
         return _err(e)
@@ -428,7 +448,8 @@ async def remove_background(image_ref: str) -> str:
         # the image that was actually matted as the reference.
         raw = imaging.defringe(raw, prep.data)
         return _finish(raw, "Cutout, background removed",
-                       {"tool": "remove_background", "source": image_ref})
+                       {"tool": "remove_background", "model": CFG["bgremove_model"],
+                        "image": image_ref})
     except Exception as e:
         return _err(e)
 
@@ -454,8 +475,11 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
             return f"Error: compose_images needs 2–3 image references, got {len(refs)}."
         raw = await client.chat_compose(CFG["chat_model"], prompt,
                                         [imaging.prepare(_resolve_image(r)).data for r in refs])
+        # Keep the actual refs (not just their count) so a Gallery re-run of a
+        # compose record feeds jobs._dispatch the images again (design §3.1 / S2).
         return _finish(raw, _caption(prompt, "Composite: "),
-                       {"tool": "compose_images", "prompt": prompt, "refs": len(refs)})
+                       {"tool": "compose_images", "model": CFG["chat_model"],
+                        "images": refs, "prompt": prompt})
     except Exception as e:
         return _err(e)
 
@@ -483,7 +507,9 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
                                 fields={"left": left, "top": top, "right": right,
                                         "bottom": bottom, "seed": _seed(seed)})
         return _finish(raw, _caption(prompt, "Extended: ") if prompt else "Extended image",
-                       {"tool": "outpaint_image", "prompt": prompt},
+                       {"tool": "outpaint_image", "model": CFG["outpaint_model"],
+                        "image": image_ref, "prompt": prompt, "left": left, "top": top,
+                        "right": right, "bottom": bottom, "seed": seed},
                        note=_transparency_note(prep, False))
     except Exception as e:
         return _err(e)

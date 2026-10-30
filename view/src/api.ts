@@ -157,6 +157,8 @@ export interface JsonSchemaProp {
   const?: unknown;
   pattern?: string;
   items?: JsonSchemaProp;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface CatalogEntry {

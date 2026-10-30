@@ -759,3 +759,92 @@ def test_generate_count_matches_single_image_contract(plugin, monkeypatch):
         assert len(calls) == len(reg.saved_media) == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("op,extra,route", [
+    ("generate", {}, "/images/generations"),
+    ("edit", {"negative_prompt": "blur"}, "/images/edits"),
+    ("region_edit", {"grounding": "shirt"}, "/images/edits"),
+    ("identity", {"grounding_px": 1024}, "/images/edits"),
+    ("identity", {"person_image": _data_url(_transparent_png()),
+                  "grounding_px": 768, "realism": True}, "/images/edits"),
+    ("outpaint", {"left": 16, "top": 32, "right": 48, "bottom": 64}, "/images/edits"),
+    ("remove_background", {}, "/images/edits"),
+    ("compose", {"images": [_data_url(_transparent_png())] * 5}, "/chat/completions"),
+])
+def test_playground_dispatch_through_gateway(plugin, monkeypatch, op, extra, route):
+    """Exercise the real transport plus preparation, save and lineage, with only
+    graph.sdk.gateway_client stubbed (no backend or host required)."""
+    import io
+
+    from PIL import Image
+
+    mod, reg = plugin
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"b64_json": base64.b64encode(PNG_1x1).decode()}],
+                    "choices": [{"message": {"content": _data_url(PNG_1x1)}}]}
+
+    class Gateway:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, path, **kwargs):
+            calls.append((path, kwargs))
+            return Response()
+
+    monkeypatch.setattr(sys.modules["graph.sdk"], "gateway_client", lambda **kw: Gateway())
+
+    async def scenario():
+        params = {"prompt": "blue shirt", "image": _data_url(_transparent_png()), "seed": 17,
+                  **extra}
+        job_id = mod.jobs.submit(op, params, parent_id="middle-node")
+        await _task(mod, job_id)
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        assert len(calls) == 1 and calls[0][0] == route
+        payload = calls[0][1]
+        if route == "/images/edits":
+            image = Image.open(io.BytesIO(payload["files"][0][1][1]))
+            assert image.mode == "RGB"
+            assert image.getpixel((3, 3)) == (255, 255, 255)
+            for key in ("grounding", "grounding_px", "left", "top", "right", "bottom"):
+                if key in extra:
+                    assert payload["data"][key] == str(extra[key])
+            if "person_image" in extra:
+                person = payload["data"]["person_image"].split(",")[1]
+                assert Image.open(io.BytesIO(base64.b64decode(person))).mode == "RGB"
+                assert "realism" in payload["data"]["model"]
+        if op == "compose":
+            assert len(payload["json"]["messages"][0]["content"]) == 6
+        assert reg.saved_media[-1][2]["parent_id"] == "middle-node"
+        assert reg.emitted[-1][0] == "protobanana.job.done"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("count", [0, 1, 11])
+def test_compose_rejects_invalid_arity_before_gateway(plugin, monkeypatch, count):
+    mod, _ = plugin
+    calls = []
+
+    async def compose(*args):
+        calls.append(args)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "chat_compose", compose)
+
+    async def scenario():
+        job_id = mod.jobs.submit("compose", {"images": [_data_url(PNG_1x1)] * count})
+        await _task(mod, job_id)
+        assert mod.jobs.get_state(job_id)["status"] == "failed"
+        assert not calls
+
+    asyncio.run(scenario())

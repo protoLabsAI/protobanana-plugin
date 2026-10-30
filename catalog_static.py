@@ -137,8 +137,8 @@ _PARAMS: dict[str, dict] = {
     }, ["image"]),
     "compose": _schema({
         "images": {"type": "array", "title": "References", "items": {"type": "string"},
-                   "minItems": 2, "maxItems": 3,
-                   "description": "2–3 reference images to combine."},
+                   "minItems": 2, "maxItems": 10,
+                   "description": "2–10 reference images to combine."},
         "prompt": _PROMPT,
     }, ["images", "prompt"]),
 }
@@ -170,7 +170,7 @@ _META: dict[str, dict] = {
                           "licence": {"non_commercial": True,
                                       "note": "RMBG-2.0 is CC BY-NC"}},
     "compose": {"label": "Compose", "route": "/chat/completions",
-                "inputs": {"images": 3, "mask": False, "person": False},
+                "inputs": {"images": 10, "mask": False, "person": False},
                 "typical_latency_s": 40},
 }
 

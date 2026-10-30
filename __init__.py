@@ -17,7 +17,9 @@ ever held open while a render runs.
 
 
 def register(registry) -> None:
-    from . import history, jobs, middleware, routes, tools
+    from pathlib import Path
+
+    from . import history, jobs, middleware, pipelines, routes, tools
 
     tools.configure(registry)
     registry.register_tools(tools.get_tools())
@@ -30,6 +32,13 @@ def register(registry) -> None:
     # Studio: the job runner reuses client.py + save_media + the event bus; the
     # router serves the public view page and the gated data routes.
     jobs.configure(registry)
+    # S7 pipelines: the DAG runner reuses the same jobs/client path + save_media +
+    # history + the event bus. Configured before the router/tools run it.
+    pipelines.configure(registry)
+    # Ship the pipelines skill so the agent knows when to reach for run_pipeline
+    # (guarded: older hosts without the seam just don't get the skill).
+    if hasattr(registry, "register_skill_dir"):
+        registry.register_skill_dir(Path(getattr(registry, "plugin_dir", ".") or ".") / "skills")
     # The router declares absolute paths (/plugins/protobanana/studio and
     # /api/plugins/protobanana/...), so mount it at the root: the default
     # prefix /plugins/<id> would double them and 404 every Studio route.

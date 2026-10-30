@@ -1,0 +1,21 @@
+# Generate a product shot, clean up its label, then cut it out as a die-cut
+# sticker (design §3.2). The canonical S7 starter: no image input, so it runs
+# end to end from a single text subject.
+id: product-sticker
+name: Product sticker
+description: >-
+  Generate a product shot, clean up its label with a region edit, then remove
+  the background for a die-cut sticker.
+inputs:
+  subject: text
+  style: { type: text, default: "studio product shot, soft shadow, centered" }
+steps:
+  - { id: gen, op: generate, params: { prompt: "{{inputs.subject}}, {{inputs.style}}", size: 1024x1024, tier: final } }
+  - { id: fix, op: region_edit, image: gen, params: { grounding: "the label", prompt: "clean, legible white label" } }
+  - { id: cut, op: remove_background, image: fix }
+output: cut
+ui:
+  positions:
+    gen: [0, 0]
+    fix: [260, 0]
+    cut: [520, 0]

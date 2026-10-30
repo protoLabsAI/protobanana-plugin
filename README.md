@@ -5,9 +5,11 @@ backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway 
 ComfyUI workflows (Qwen-Image-2.1 / 2.1 Turbo, SAM 3 region edit, BiRefNet background
 removal) behind LiteLLM.
 
-The agent gets seven tools; every result is persisted to the core media store, renders
+The agent gets seven image tools; every result is persisted to the core media store, renders
 inline in chat, and — on a vision model — is attached to the tool result so the agent can
-**see** what it just made and iterate (generate → look → refine).
+**see** what it just made and iterate (generate → look → refine). Three more tools
+(`list_pipelines`, `run_pipeline`, `save_pipeline`) run and author **pipelines** — saved,
+re-runnable graphs that chain these operations (see `skills/pipelines/SKILL.md`).
 
 | Tool | Route | Default alias (setting) | Use |
 |---|---|---|---|

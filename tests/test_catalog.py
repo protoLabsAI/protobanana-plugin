@@ -851,3 +851,78 @@ def test_jobs_resolves_through_snapshot_not_catalog_static():
     assert "catalog.build(" in src
     assert "catalog_static.alias_for" not in src
     assert "catalog_static.entry" not in src
+
+
+@pytest.mark.parametrize("op,config_key,tier", [
+    ("generate", "gen_model", "final"),
+    ("generate", "fast_gen_model", "draft"),
+    ("edit", "edit_model", "final"),
+    ("edit", "fast_edit_model", "draft"),
+])
+def test_known_configured_alias_is_fallback_to_gateway_default(monkeypatch, op, config_key, tier):
+    """Operator decision: being known does not make a config alias the live default.
+
+    The picker and actual render agree, explicit overrides still work, and a
+    gateway outage restores the user's configured alias.
+    """
+    from test_jobs import PNG_1x1, _data_url
+
+    configured = "configured-model"
+    mod, reg = _load({config_key: configured})
+    alternate = _upscale_op()
+    alternate["aliases"] = {"final": configured}
+    _install_gateway(monkeypatch, {"ops": [
+        {"op": op, "aliases": {tier: "gateway-default"}}, alternate,
+    ]}, [])
+    rendered = []
+
+    async def render(alias, *args, **kwargs):
+        rendered.append(alias)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, "generate", render)
+    monkeypatch.setattr(mod.jobs.client, "edit", render)
+
+    async def scenario():
+        async with await _client(_app(reg)) as ac:
+            response = await ac.get("/api/plugins/protobanana/catalog")
+            assert response.status_code == 200
+            snapshot = response.json()
+        entry = next(e for e in snapshot["ops"] if e["op"] == op)
+        assert entry["aliases"][tier] == "gateway-default"
+        assert not any(configured in warning for warning in snapshot["warnings"])
+        for offline, override, expected in [
+            (False, None, "gateway-default"),
+            (False, configured, configured),
+            (True, None, configured),
+        ]:
+            if offline:
+                mod.catalog.reset_cache()
+                _boom_gateway(monkeypatch)
+            job_id = mod.jobs.submit(op, {"prompt": "fox", "image": _data_url(PNG_1x1)},
+                                     tier=tier, alias=override)
+            await mod.jobs._jobs[job_id]["_task"]
+            state = mod.jobs.get_state(job_id)
+            assert state["status"] == "done"
+            assert state["alias"] == expected
+            assert rendered[-1] == expected
+
+    asyncio.run(scenario())
+
+
+def test_unsupported_route_is_neither_pickable_nor_renderable(monkeypatch):
+    mod, reg = _load()
+    entry = {**_upscale_op(), "route": "/unsupported"}
+    _install_gateway(monkeypatch, {"ops": [entry]}, [])
+
+    async def scenario():
+        snapshot = await mod.catalog.build({})
+        assert not any(e["op"] == "upscale" for e in snapshot["ops"])
+        job_id = mod.jobs.submit("upscale", {}, alias="manual-override")
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "failed"
+        assert "not in the catalog" in mod.jobs.get_state(job_id)["error"]
+        assert [topic for topic, _ in reg.emitted] == ["protobanana.job.failed"]
+        assert not reg.saved_media
+
+    asyncio.run(scenario())

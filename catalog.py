@@ -209,11 +209,11 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
             # Built-in op: static stays the floor; only the alias map merges.
             static_entry = by_op[op]
             merged = dict(static_entry)
-            base_aliases = static_entry.get("aliases")
-            gw_aliases = e.get("aliases")
-            if isinstance(base_aliases, dict) and isinstance(gw_aliases, dict):
-                merged["aliases"] = {**base_aliases,
-                                     **{k: v for k, v in gw_aliases.items() if v}}
+            # Operator decision: gateway tiers win even when a configured alias
+            # is also known to the gateway. Config supplies omitted tiers and
+            # the offline fallback; explicit job overrides remain authoritative.
+            # _normalize_entry has already validated every gateway alias.
+            merged["aliases"] = {**static_entry["aliases"], **e["aliases"]}
             by_op[op] = merged
         else:
             # Gateway-only op: append with its own form/route/alias.

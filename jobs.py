@@ -378,8 +378,9 @@ def _mask(ref: str) -> bytes:
 
 
 def _person_data_url(ref: str) -> str:
-    from . import imaging, tools
-    return tools._person_data_url(imaging.prepare(tools._resolve_image(ref)).data)
+    """Prepare a person reference and encode it for the gateway's edit fields."""
+    from . import tools
+    return tools._person_data_url(_image(ref))
 
 
 def _publish(topic: str, data: dict) -> None:

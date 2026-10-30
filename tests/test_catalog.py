@@ -452,6 +452,43 @@ def test_gateway_only_operations_render_through_documented_routes(monkeypatch):
         assert str(payload['scale']) == '4'
 
 
+@pytest.mark.parametrize("valid_person", [True, False])
+def test_gateway_only_edit_prepares_person_reference_and_finishes(monkeypatch, valid_person):
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+    from test_jobs import PNG_1x1, _data_url, _transparent_png
+
+    mod, reg = _load()
+    entry = _upscale_op()
+    entry["params"]["properties"]["person_image"] = {"type": "string"}
+    _install_gateway(monkeypatch, {"ops": [entry]}, [])
+    calls = []
+
+    async def edit(alias, prompt, image, *, fields, mask):
+        calls.append(alias)
+        prefix, encoded = fields["person_image"].split(",", 1)
+        assert prefix == "data:image/png;base64"
+        with Image.open(BytesIO(base64.b64decode(encoded))) as person:
+            assert person.convert("RGB").getpixel((1, 1)) == (255, 255, 255)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, "edit", edit)
+
+    async def scenario():
+        person = _data_url(_transparent_png()) if valid_person else "data:image/png;base64,a"
+        job_id = mod.jobs.submit("upscale", {"image": _data_url(PNG_1x1),
+                                              "person_image": person})
+        await mod.jobs._jobs[job_id]["_task"]
+        status = "done" if valid_person else "failed"
+        assert mod.jobs.get_state(job_id)["status"] == status
+        assert [topic for topic, _ in reg.emitted] == [f"protobanana.job.{status}"]
+        assert calls == ([entry["aliases"]["final"]] if valid_person else [])
+
+    asyncio.run(scenario())
+
+
 def test_displayed_gateway_alias_is_rendered_and_override_wins(monkeypatch):
     from test_jobs import PNG_1x1
 

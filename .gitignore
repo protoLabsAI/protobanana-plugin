@@ -2,6 +2,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Plugin data dir (Studio history index + starred media copies). Runtime state,
+# written beside the plugin when the host exposes no scoped data dir; never
+# committed. Tests use isolated tmp dirs.
+.studio/
+
 # Studio view (Vite + React). node_modules is never committed; view/dist IS —
 # git installs and the frozen desktop runtime have no Node, so the built output
 # is checked in (design R7). Do not add view/dist here.

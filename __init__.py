@@ -17,13 +17,16 @@ ever held open while a render runs.
 
 
 def register(registry) -> None:
-    from . import jobs, middleware, routes, tools
+    from . import history, jobs, middleware, routes, tools
 
     tools.configure(registry)
     registry.register_tools(tools.get_tools())
     # Attachment bridge: user-attached images → media-store ids the model can
     # hand to the image tools (single or multiple attachments).
     registry.register_middleware(middleware.build_factory(registry))
+    # Shared history index (one log for agent + Studio renders) in the plugin
+    # data dir; configured before the tools and the job runner write to it.
+    history.configure(registry)
     # Studio: the job runner reuses client.py + save_media + the event bus; the
     # router serves the public view page and the gated data routes.
     jobs.configure(registry)

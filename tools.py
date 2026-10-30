@@ -18,7 +18,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import client, imaging
+from . import client, history, imaging
 
 _registry = None
 CFG: dict = {}
@@ -173,6 +173,10 @@ def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
     ``caption`` is the finished alt text (build it with ``_caption``); ``note``
     is appended to the first line (size/transparency caveats for the model)."""
     ref = _registry.save_media(raw, "image/png", meta)
+    # Shared history (design §4): this agent render joins the Studio gallery with
+    # source="agent". record_agent never raises — a history write must not break
+    # a tool call (tools return readable strings, never raise).
+    history.record_agent(ref.id, meta)
     alt = caption or "Generated image"
     text = (
         f"Done — {_dims(raw)} image saved as `{ref.id}`.{(' ' + note) if note else ''}\n\n"

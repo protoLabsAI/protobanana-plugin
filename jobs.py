@@ -221,6 +221,12 @@ async def _run(job_id: str) -> None:
             elapsed = round(time.monotonic() - started, 2)
             st.update(status="done", media_id=ref.id, url=getattr(ref, "url", None),
                       elapsed_s=elapsed)
+            # Shared history (design §3.1/§4): record this Studio render with its
+            # parent_id / op / alias / params so it joins the gallery alongside
+            # agent renders. Best-effort (record_studio never raises), written
+            # before the bus event so the gallery's refresh sees it.
+            from . import history
+            history.record_studio(st, ref.id)
             _publish("protobanana.job.done", {
                 "job_id": job_id, "media_id": ref.id, "url": getattr(ref, "url", None),
                 "op": st["op"], "alias": st.get("alias"), "elapsed_s": elapsed,

@@ -8,6 +8,9 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/api/plugins/protobanana/jobs``        POST a render, GET recent (gated)
 - ``/api/plugins/protobanana/jobs/<id>``   GET one job's state (gated)
 - ``/api/plugins/protobanana/catalog``     GET the static param schema (gated)
+- ``/api/plugins/protobanana/history``     GET a cursor page (op/source/starred) (gated)
+- ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
+- ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
 
 No route holds a request open while a render runs: ``POST /jobs`` returns a
 ``job_id`` in well under a second (it never awaits the render; completion
@@ -24,7 +27,7 @@ import). Evaluating annotations eagerly keeps the real classes on the handlers.
 
 from pathlib import Path
 
-from . import catalog_static, jobs
+from . import catalog_static, history, jobs
 
 _API = "/api/plugins/protobanana"
 _PAGE = "/plugins/protobanana/studio"
@@ -92,7 +95,7 @@ def safe_asset(view_dir: Path, rel: str) -> Path | None:
 def build_router(registry):
     """Build the Studio APIRouter. Call at register() time (imports FastAPI)."""
     from fastapi import APIRouter, HTTPException, Request
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
     from pydantic import BaseModel
 
     router = APIRouter()
@@ -129,6 +132,45 @@ def build_router(registry):
     async def get_catalog():  # noqa: ANN202
         cfg = dict(getattr(registry, "live_config", lambda: registry.config)() or {})
         return {"ops": catalog_static.build_catalog(cfg)}
+
+    # ---- shared history index (agent + studio) -----------------------------
+    @router.get(f"{_API}/history")
+    async def list_history(cursor: int | None = None, op: str | None = None,
+                           source: str | None = None, starred: bool | None = None,
+                           limit: int = 48):  # noqa: ANN202
+        """A bounded, newest-first page with a cursor and op/source/starred
+        filters. Each record carries live ``starred``/``pruned`` flags; a pruned,
+        unstarred record (store original gone, no copy) is flagged so the gallery
+        shows a 'pruned' tile instead of a broken image."""
+        return history.read(cursor=cursor, op=op, source=source,
+                             starred=starred, limit=limit)
+
+    @router.post(f"{_API}/history/{{media_id}}/star")
+    async def star_media(media_id: str):  # noqa: ANN202
+        """Star an item: copy its bytes into the plugin data dir so
+        media.retention_days can't prune them (design R4)."""
+        ok = history.star(media_id)
+        if not ok:
+            raise HTTPException(status_code=404,
+                                detail="cannot star: no bytes to copy (already pruned)")
+        return {"media_id": media_id, "starred": True}
+
+    @router.post(f"{_API}/history/{{media_id}}/unstar")
+    async def unstar_media(media_id: str):  # noqa: ANN202
+        """Unstar an item: drop the plugin-data copy (idempotent)."""
+        history.unstar(media_id)
+        return {"media_id": media_id, "starred": False}
+
+    @router.get(f"{_API}/history/{{media_id}}/image")
+    async def history_image(media_id: str):  # noqa: ANN202
+        """Serve an item's bytes — the store original when present, else the
+        starred copy (so a starred item survives a prune). 404 when neither
+        exists (a pruned, unstarred record). Gated like every data route: the
+        view fetches it through the kit (bearer) and shows a blob URL."""
+        raw = history.image_bytes(media_id)
+        if raw is None:
+            raise HTTPException(status_code=404, detail="media not available (pruned)")
+        return Response(content=raw, media_type="image/png")
 
     # ---- public page + assets ---------------------------------------------
     # Serve the page at the manifest path AND at its trailing-slash form: the

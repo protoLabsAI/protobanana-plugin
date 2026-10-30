@@ -267,6 +267,8 @@ body {
   bottom: 16px;
   transform: translateX(-50%);
   width: min(94%, 440px);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
   display: grid;
   gap: 8px;
   z-index: 5;

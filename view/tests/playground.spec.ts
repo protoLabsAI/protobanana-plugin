@@ -281,6 +281,85 @@ test("the unreachable banner shows with Reload when the API is down", async ({ p
   await expect(banner.getByRole("button", { name: "Reload", exact: true })).toBeVisible();
 });
 
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: failures survive other completions and failures; actions affect only their job`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    for (const text of ["First vase", "Second vase", "Third vase"]) {
+      await prompt(page).fill(text);
+      await page.getByRole("button", { name: "Generate", exact: true }).click();
+    }
+    await expect.poll(() => requests.length).toBe(3);
+    await expect(page.locator(".rendering-badge")).toHaveText("3 rendering");
+
+    const fail = (id: number, errorKind = "gateway_timeout") => page.evaluate(({ id, errorKind }) =>
+      window.postMessage({ type: "protoagent:event", topic: "protobanana.job.failed",
+        data: { job_id: `job-${id}`, error_kind: errorKind, recoverable: errorKind === "gateway_timeout",
+          error: `Failure ${id}`, hint: `Details for render ${id}` } }, "*"), { id, errorKind });
+    const first = page.getByRole("region", { name: "Failed render: First vase", exact: true });
+    const second = page.getByRole("region", { name: "Failed render: Second vase", exact: true });
+
+    await fail(1);
+    await expect(first.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    await busDone(page, { job_id: "job-3", media_id: "leaf" });
+    await expect(page.getByAltText("Current image")).toBeVisible();
+    await expect(page.locator(".rendering-badge")).toHaveText("1 rendering");
+    await expect(first.getByRole("button", { name: "Edit prompt", exact: true })).toBeVisible();
+
+    await fail(2, "invalid_input");
+    await expect(second).toContainText("Details for render 2");
+    await expect(second.getByRole("button", { name: "Copy details" })).toBeVisible();
+    await expect(first).toContainText("GPU busy");
+    await expect(page.locator(".rendering-badge")).toHaveCount(0);
+
+    // Navigating the canvas must not discard unresolved job failures.
+    await page.getByRole("button", { name: "+ New", exact: true }).click();
+    await page.locator(".g-tile").first().getByRole("button", { name: /render/ }).click();
+    await expect(first).toBeVisible();
+    await expect(second).toBeVisible();
+
+    const retryTracking = page.waitForRequest("**/fixture/jobs/job-4");
+    await first.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(4);
+    expect(requests[3]).toEqual(requests[0]);
+    await expect(first).toHaveCount(0);
+    await expect(second).toBeVisible();
+
+    // Wait for tracking to start before delivering a bus event for the retry.
+    await retryTracking;
+    await fail(4);
+    await expect(first).toBeVisible();
+    await second.getByRole("button", { name: "Edit prompt", exact: true }).click();
+    await expect(second).toHaveCount(0);
+    await expect(prompt(page)).toBeFocused();
+    await expect(first).toBeVisible();
+    await first.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(first).toHaveCount(0);
+  });
+
+  test(`${theme}: late results clear only their matching failure`, async ({ page }) => {
+    const requests = await setup(page, theme, "timeout");
+    for (const text of ["First timeout", "Second timeout"]) {
+      await prompt(page).fill(text);
+      await page.getByRole("button", { name: "Generate", exact: true }).click();
+    }
+    await expect.poll(() => requests.length).toBe(2);
+    const first = page.getByRole("region", { name: "Failed render: First timeout", exact: true });
+    const second = page.getByRole("region", { name: "Failed render: Second timeout", exact: true });
+    await expect(first).toBeVisible({ timeout: 6000 });
+    await expect(second).toBeVisible({ timeout: 6000 });
+
+    await busDone(page, { job_id: "unrelated-agent-job", media_id: "root" });
+    await expect(first).toBeVisible();
+    await expect(second).toBeVisible();
+    await busDone(page, { job_id: "job-1", media_id: "leaf" });
+    await expect(first).toHaveCount(0);
+    await expect(page.getByAltText("Current image")).toBeVisible();
+    await expect(second.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    await busDone(page, { job_id: "job-2", media_id: "middle" });
+    await expect(second).toHaveCount(0);
+  });
+}
+
 test("History filter narrows by op, source and starred", async ({ page }) => {
   await setup(page);
   await expect(page.locator(".g-tile")).toHaveCount(3);

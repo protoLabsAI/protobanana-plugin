@@ -275,7 +275,7 @@ export function App() {
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [phases, setPhases] = useState<Record<number, { phase: Phase; jobId: string | null }>>({});
-  const [callout, setCallout] = useState<{ item: QueueItem; phase: Extract<Phase, { kind: "failed" }>; jobId: string | null } | null>(null);
+  const [callouts, setCallouts] = useState<{ item: QueueItem; phase: Extract<Phase, { kind: "failed" }>; jobId: string | null }[]>([]);
 
   const [revision, setRevision] = useState(0);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -354,12 +354,13 @@ export function App() {
   // image. (Gallery refreshes its own grid off the same bus topic + `revision`.)
   useEffect(() => subscribe("protobanana.job.done", (data) => {
     const d = data as JobState | null;
-    if (d && callout && d.job_id === callout.jobId) {
-      setCallout(null);
+    const callout = d && callouts.find(c => c.jobId === d.job_id);
+    if (d && callout) {
+      setCallouts(cs => cs.filter(c => c.item.id !== callout.item.id));
       landResult(d.media_id ?? null, d.url || "", d.elapsed_s ?? 0, callout.item.request);
       setRevision(v => v + 1);
     }
-  }), [callout, landResult]);
+  }), [callouts, landResult]);
 
   useEffect(() => {
     if (!focus) return;
@@ -396,7 +397,6 @@ export function App() {
 
   const handleDone = useCallback((item: QueueItem, phase: Extract<Phase, { kind: "done" }>) => {
     landResult(phase.mediaId, phase.url, phase.elapsed, item.request);
-    setCallout(null);
     setQueue(q => q.filter(j => j.id !== item.id));
     setPhases(p => { const n = { ...p }; delete n[item.id]; return n; });
     setRevision(v => v + 1); // nudges Gallery to re-fetch the shared index
@@ -406,7 +406,7 @@ export function App() {
   const handleFail = useCallback((item: QueueItem, phase: Extract<Phase, { kind: "failed" }>, jobId: string | null) => {
     setQueue(q => q.filter(j => j.id !== item.id));
     setPhases(p => { const n = { ...p }; delete n[item.id]; return n; });
-    setCallout({ item, phase, jobId });
+    setCallouts(cs => [...cs, { item, phase, jobId }]);
   }, []);
 
   const stop = useCallback((id: number) => {
@@ -420,7 +420,6 @@ export function App() {
     setUpload(undefined);
     setPrunedSelected(false);
     setFocusError("");
-    setCallout(null);
     setFocusSignal(s => s + 1);
   };
 
@@ -429,7 +428,6 @@ export function App() {
     setUpload(undefined);
     setPrunedSelected(rec.pruned);
     setSelected(rec);
-    setCallout(null);
     setFocusError("");
     setDrawerOpen(false);
   };
@@ -442,7 +440,6 @@ export function App() {
       setSelected(undefined);
       setResult(undefined);
       setPrunedSelected(false);
-      setCallout(null);
       setFocusError("");
       setUpload(String(reader.result));
     };
@@ -465,34 +462,40 @@ export function App() {
   }).length;
   const busy = queue.length > 0;
 
-  const retry = () => { if (callout) { submit(callout.item.request); setCallout(null); } };
-  const editPrompt = () => { setCallout(null); setFocusSignal(s => s + 1); };
-  const copyDetails = () => {
-    const text = callout ? `${callout.phase.error}\n${callout.phase.hint}`.trim() : "";
-    try { navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ }
-  };
-
-  const calloutNode = callout ? (() => {
-    const kind = callout.phase.errorKind;
-    if (kind === "gateway_timeout") {
-      return <Callout tone="warning" title="GPU busy"
-        actions={<><Button variant="primary" size="sm" onClick={retry}>Retry</Button>
-          <Button variant="ghost" size="sm" onClick={editPrompt}>Edit prompt</Button></>}>
-        GPU busy — the gateway timed out. Your render may still land in History.
+  const calloutNodes = callouts.map(callout => {
+    const dismiss = () => setCallouts(cs => cs.filter(c => c.item.id !== callout.item.id));
+    const retry = () => { submit(callout.item.request); dismiss(); };
+    const editPrompt = () => { dismiss(); setFocusSignal(s => s + 1); };
+    const copyDetails = () => {
+      const text = `${callout.phase.error}\n${callout.phase.hint}`.trim();
+      try { navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ }
+    };
+    const dismissButton = <Button variant="ghost" size="sm" onClick={dismiss}>Dismiss</Button>;
+    const content = (() => {
+      const kind = callout.phase.errorKind;
+      if (kind === "gateway_timeout") {
+        return <Callout tone="warning" title="GPU busy"
+          actions={<><Button variant="primary" size="sm" onClick={retry}>Retry</Button>
+            <Button variant="ghost" size="sm" onClick={editPrompt}>Edit prompt</Button>{dismissButton}</>}>
+          GPU busy — the gateway timed out. Your render may still land in History.
+        </Callout>;
+      }
+      if (callout.phase.recoverable) {
+        return <Callout tone="warning" title="Lost track of this render"
+          actions={<><Button variant="primary" size="sm" onClick={retry}>Retry</Button>{dismissButton}</>}>
+          {callout.phase.hint || "Press Retry to run it again."}
+        </Callout>;
+      }
+      return <Callout tone="error" title="Render failed"
+        actions={<><Button variant="ghost" size="sm" onClick={copyDetails}>Copy details</Button>
+          <Button variant="ghost" size="sm" onClick={editPrompt}>Edit prompt</Button>{dismissButton}</>}>
+        {callout.phase.hint || callout.phase.error}
       </Callout>;
-    }
-    if (callout.phase.recoverable) {
-      return <Callout tone="warning" title="Lost track of this render"
-        actions={<Button variant="primary" size="sm" onClick={retry}>Retry</Button>}>
-        {callout.phase.hint || "Press Retry to run it again."}
-      </Callout>;
-    }
-    return <Callout tone="error" title="Render failed"
-      actions={<><Button variant="ghost" size="sm" onClick={copyDetails}>Copy details</Button>
-        <Button variant="ghost" size="sm" onClick={editPrompt}>Edit prompt</Button></>}>
-      {callout.phase.hint || callout.phase.error}
-    </Callout>;
-  })() : null;
+    })();
+    return <section key={callout.item.id} aria-label={`Failed render: ${callout.item.request.params.prompt || callout.item.request.op}`}>
+      {content}
+    </section>;
+  });
 
   const gallery = (
     <Gallery
@@ -591,12 +594,12 @@ export function App() {
               />
             ) : null}
 
-            {(activeRendering || calloutNode) && (
+            {(activeRendering || calloutNodes.length > 0) && (
               <div className="overlay" role="status">
                 {activeRendering && active && (
                   <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
                 )}
-                {calloutNode}
+                {calloutNodes}
               </div>
             )}
           </div>

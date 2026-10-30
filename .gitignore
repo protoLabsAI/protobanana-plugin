@@ -13,3 +13,5 @@ __pycache__/
 view/node_modules/
 view/.vite/
 npm-debug.log*
+view/test-results/
+view/playwright-report/

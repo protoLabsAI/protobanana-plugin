@@ -208,8 +208,10 @@ function Tile({
 export function Gallery({
   catalog,
   onRerun,
+  revision = 0,
 }: {
   catalog: CatalogEntry[] | null;
+  revision?: number;
   onRerun: (req: JobRequest) => void;
 }) {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
@@ -266,7 +268,7 @@ export function Gallery({
   // Reload whenever the filters change…
   useEffect(() => {
     reload();
-  }, [reload]);
+  }, [reload, revision]);
 
   // …and on every job completion (ADR 0039 bus-driven refresh): a fresh render —
   // whether from the agent or this view — joins the gallery within one bus tick.

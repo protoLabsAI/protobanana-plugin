@@ -260,6 +260,8 @@ async def _dispatch(st: dict) -> bytes:
         return imaging.defringe(raw, prep.data)
     if op == "compose":
         refs = [r for r in (params.get("images") or params.get("image_refs") or []) if str(r).strip()]
+        if not 2 <= len(refs) <= 10:
+            raise ValueError("Compose requires 2–10 reference images.")
         return await client.chat_compose(alias, params.get("prompt", ""),
                                          [_image(r) for r in refs])
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type CatalogEntry,
@@ -6,19 +6,25 @@ import {
   type JobState,
   fetchCatalog,
   getJob,
-  mediaSrc,
+  fetchHistory,
+  fetchHistoryImage,
+  type HistoryRecord,
   ready,
   submitJob,
   subscribe,
 } from "./api";
 import { Gallery } from "./Gallery";
+import { OpForm, MarginCanvas } from "./OpForm";
+import { Lineage } from "./Lineage";
+import { Compare } from "./Compare";
+import { QueueStrip, type QueueItem } from "./QueueStrip";
 
 // Poll GET /jobs/{id} as a FALLBACK for the bus (design R1 / card): short
 // requests, never a long-poll. Whichever of the bus event or a poll lands first
 // settles the job; the other is torn down.
 const POLL_MS = 2500;
 
-type Phase =
+export type Phase =
   | { kind: "idle" }
   | { kind: "submitting" }
   | { kind: "pending"; jobId: string; startedAt: number; queuePosition: number }
@@ -51,21 +57,25 @@ function lostPhase(): Phase {
 
 /** Submit a job and track it to completion over the bus, with a GET /jobs/{id}
  *  polling backstop. Returns the current phase and a `run(req)` launcher. */
-function useJobRunner() {
+export function useJobRunner() {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const cleanupRef = useRef<() => void>(() => {});
 
+  const generation = useRef(0);
+
   // Tear down subscriptions/poll on unmount.
-  useEffect(() => () => cleanupRef.current(), []);
+  useEffect(() => () => { generation.current++; cleanupRef.current(); }, []);
 
   const run = useCallback(async (req: JobRequest) => {
     cleanupRef.current();
+    const token = ++generation.current;
     setPhase({ kind: "submitting" });
 
     let jobId: string;
     try {
       jobId = await submitJob(req); // returns a job_id in well under 1 s (R1)
     } catch (e) {
+      if (token !== generation.current) return;
       setPhase({
         kind: "failed",
         error: String(e),
@@ -76,11 +86,12 @@ function useJobRunner() {
       return;
     }
 
+    if (token !== generation.current) return;
     setPhase({ kind: "pending", jobId, startedAt: Date.now(), queuePosition: 0 });
 
     let settled = false;
     const finish = (p: Phase) => {
-      if (settled) return;
+      if (settled || token !== generation.current) return;
       settled = true;
       cleanupRef.current();
       setPhase(p);
@@ -116,7 +127,7 @@ function useJobRunner() {
     };
 
     const poll = window.setInterval(async () => {
-      if (settled) return;
+      if (settled || token !== generation.current) return;
       let st: JobState | null;
       try {
         st = await getJob(jobId);
@@ -124,7 +135,7 @@ function useJobRunner() {
         strike(); // transient request error — but don't hang forever on it
         return;
       }
-      if (settled) return;
+      if (settled || token !== generation.current) return;
       if (st === null) {
         strike(); // 404: job gone from the in-memory store (reload/restart/evicted)
         return;
@@ -150,339 +161,93 @@ function useJobRunner() {
   return { phase, run };
 }
 
-/** A live tabular-digits seconds counter (isolated so only it re-renders). */
-function Elapsed({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(() => Date.now());
+function useImage(ref?: string | null) {
+  const [url, setUrl] = useState<string>();
   useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 500);
-    return () => window.clearInterval(t);
-  }, []);
-  return <>{Math.max(0, Math.round((now - startedAt) / 1000))}s</>;
+    setUrl(undefined);
+    if (!ref) return;
+    if (/^(data:|blob:|https?:|\/)/.test(ref)) { setUrl(ref); return; }
+    let alive = true;
+    let blob: string | undefined;
+    fetchHistoryImage(ref).then(value => { blob = value; if (alive) setUrl(value); else URL.revokeObjectURL(value); }).catch(() => {});
+    return () => { alive = false; if (blob) URL.revokeObjectURL(blob); };
+  }, [ref]);
+  return url;
 }
-
-// ------------------------------------------------------------- Generate form
-
-const SIZE_PRESETS = [
-  { label: "Square", value: "1024x1024" },
-  { label: "Portrait", value: "768x1280" },
-  { label: "Landscape", value: "1280x768" },
-  { label: "Wide", value: "1344x768" },
-  { label: "Tall", value: "768x1344" },
-];
-
-function schemaDefault(entry: CatalogEntry, key: string, fallback: string): string {
-  const v = entry.params.properties[key]?.default;
-  return typeof v === "string" ? v : fallback;
-}
-
-interface GenerateFormProps {
-  entry: CatalogEntry;
-  busy: boolean;
-  onSubmit: (req: JobRequest) => void;
-}
-
-function GenerateForm({ entry, busy, onSubmit }: GenerateFormProps) {
-  const [prompt, setPrompt] = useState("");
-  const [negative, setNegative] = useState(() => schemaDefault(entry, "negative_prompt", ""));
-  const [size, setSize] = useState(() => schemaDefault(entry, "size", "1024x1024"));
-  const [tier, setTier] = useState<string>(entry.default_tier || "final");
-  const [locked, setLocked] = useState(false);
-  const [seed, setSeed] = useState(0);
-
-  const roll = () => {
-    setSeed(Math.floor(Math.random() * 2 ** 31));
-    setLocked(true);
-  };
-  const toggleLock = () => {
-    setLocked((was) => {
-      if (!was && seed === 0) setSeed(Math.floor(Math.random() * 2 ** 31));
-      return !was;
-    });
-  };
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!prompt.trim() || busy) return;
-    onSubmit({
-      op: "generate",
-      tier,
-      params: {
-        prompt: prompt.trim(),
-        negative_prompt: negative,
-        size,
-        // Locked → the fixed, reproducible seed; unlocked → -1 (the runner reads
-        // a negative seed as "random", exactly as the agent tool does).
-        seed: locked ? seed : -1,
-      },
-    });
-  };
-
-  return (
-    <form className="form" onSubmit={submit}>
-      <div className="field">
-        <label htmlFor="prompt">Prompt</label>
-        <textarea
-          id="prompt"
-          value={prompt}
-          placeholder="a studio product shot of a ripe banana on seamless paper"
-          onChange={(e) => setPrompt(e.target.value)}
-          autoFocus
-        />
-      </div>
-
-      <div className="field">
-        <label htmlFor="negative">Negative prompt</label>
-        <input
-          id="negative"
-          type="text"
-          value={negative}
-          placeholder="what to avoid (optional)"
-          onChange={(e) => setNegative(e.target.value)}
-        />
-      </div>
-
-      <div className="field">
-        <label>Size</label>
-        <div className="chips" role="group" aria-label="Size presets">
-          {SIZE_PRESETS.map((p) => (
-            <button
-              type="button"
-              key={p.value}
-              className="chip"
-              aria-pressed={size === p.value}
-              onClick={() => setSize(p.value)}
-            >
-              {p.label} · {p.value}
-            </button>
-          ))}
-        </div>
-        <input
-          type="text"
-          aria-label="Custom size (WxH)"
-          value={size}
-          onChange={(e) => setSize(e.target.value)}
-        />
-        <span className="desc">{entry.params.properties.size?.description}</span>
-      </div>
-
-      <div className="field">
-        <label>Seed</label>
-        <div className="seed-row">
-          <input
-            type="number"
-            min={0}
-            aria-label="Seed"
-            value={locked ? seed : ""}
-            placeholder="random"
-            disabled={!locked}
-            onChange={(e) => setSeed(Math.max(0, Number(e.target.value) || 0))}
-          />
-          <button
-            type="button"
-            className="icon-btn"
-            aria-pressed={locked}
-            aria-label={locked ? "Seed locked (reused each render)" : "Seed random each render"}
-            title={locked ? "Locked — this seed is reused" : "Unlocked — a random seed each render"}
-            onClick={toggleLock}
-          >
-            {locked ? "🔒" : "🔓"}
-          </button>
-          <button type="button" className="icon-btn" aria-label="Roll a new random seed" title="Roll a new seed" onClick={roll}>
-            🎲
-          </button>
-        </div>
-        <span className="desc">{locked ? "Fixed seed — reproducible." : "A fresh random seed each render."}</span>
-      </div>
-
-      <div className="field">
-        <label>Quality tier</label>
-        <div className="toggle" role="group" aria-label="Quality tier">
-          <button type="button" aria-pressed={tier === "draft"} onClick={() => setTier("draft")}>
-            Draft
-          </button>
-          <button type="button" aria-pressed={tier === "final"} onClick={() => setTier("final")}>
-            Final
-          </button>
-        </div>
-        <span className="desc">
-          {tier === "draft" ? "Fast turbo tier — rapid exploration." : "Full model — best quality."}{" "}
-          {entry.aliases[tier] ? `(${entry.aliases[tier]})` : ""}
-        </span>
-      </div>
-
-      <button className="submit" type="submit" disabled={busy || !prompt.trim()}>
-        {busy ? "Rendering…" : "Generate"}
-      </button>
-    </form>
-  );
-}
-
-// -------------------------------------------------------------- centre canvas
-
-function Canvas({ entry, phase, onRetry }: { entry?: CatalogEntry; phase: Phase; onRetry: () => void }) {
-  if (phase.kind === "done") {
-    return (
-      <>
-        <div className="canvas">
-          <img className="result" src={mediaSrc(phase.url)} alt="Generated image" />
-        </div>
-        <div className="meta-row">
-          <span>done in {phase.elapsed}s</span>
-          {phase.mediaId ? <span>media {phase.mediaId}</span> : null}
-          {phase.url ? (
-            <a href={mediaSrc(phase.url)} target="_blank" rel="noreferrer">
-              Open in new tab
-            </a>
-          ) : null}
-        </div>
-      </>
-    );
-  }
-
-  if (phase.kind === "failed") {
-    const recoverable = phase.recoverable || phase.errorKind === "gateway_timeout";
-    // A 524 keeps the GPU job running (retry re-attaches); a missing job was lost
-    // and must be re-run. Both are recoverable (Retry shows), but say which.
-    const heading =
-      phase.errorKind === "gateway_timeout" ? "Still rendering" : recoverable ? "Render interrupted" : "Render failed";
-    return (
-      <div className="canvas">
-        <div className={`failure${recoverable ? " recoverable" : ""}`}>
-          <div className="kind">{heading}</div>
-          <div className="hint">{phase.hint || phase.error}</div>
-          {recoverable ? (
-            <button className="submit" type="button" onClick={onRetry}>
-              Retry
-            </button>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
-  if (phase.kind === "pending" || phase.kind === "submitting") {
-    const startedAt = phase.kind === "pending" ? phase.startedAt : Date.now();
-    const queued = phase.kind === "pending" && phase.queuePosition > 0;
-    return (
-      <div className="canvas">
-        <div className="pending">
-          <div className="spinner" aria-hidden="true" />
-          <div className="elapsed">
-            <Elapsed startedAt={startedAt} />
-          </div>
-          <div>{queued ? "Queued behind another render…" : "Rendering…"}</div>
-          {entry ? <div className="hint">~{entry.typical_latency_s}s typical</div> : null}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="canvas">
-      <div className="placeholder">
-        <p>Fill the form and press Generate.</p>
-        <p className="hint">The image appears here when the render completes.</p>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------- shell
 
 export function App() {
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
-  const [catalogError, setCatalogError] = useState<string>("");
-  const [selectedOp, setSelectedOp] = useState("generate");
-  const lastReq = useRef<JobRequest | null>(null);
-  const { phase, run } = useJobRunner();
-
+  const [error, setError] = useState("");
+  const [op, setOp] = useState("generate");
+  const [params, setParams] = useState<Record<string, unknown>>({});
+  const [records, setRecords] = useState<HistoryRecord[]>([]);
+  const [selected, setSelected] = useState<HistoryRecord>();
+  const [result, setResult] = useState<{ mediaId: string | null; url: string; elapsed: number }>();
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [revision, setRevision] = useState(0);
+  const sequence = useRef(0);
+  const reload = useCallback(async () => {
+    const all: HistoryRecord[] = [];
+    let cursor: number | null = null;
+    do {
+      const page = await fetchHistory({ cursor, limit: 100 });
+      all.push(...page.records); cursor = page.next_cursor;
+    } while (cursor !== null);
+    setRecords(all);
+  }, []);
   useEffect(() => {
     let alive = true;
-    (async () => {
-      await ready(); // bearer + theme handshake first
-      try {
-        const ops = await fetchCatalog();
-        if (alive) setCatalog(ops);
-      } catch (e) {
-        if (alive) setCatalogError(String(e));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    ready().then(async () => {
+      try { const ops = await fetchCatalog(); if (alive) setCatalog(ops); await reload(); }
+      catch (e) { if (alive) setError(String(e)); }
+    });
+    return () => { alive = false; };
+  }, [reload]);
+  useEffect(() => subscribe("protobanana.job.done", () => { reload().catch(e => setError(String(e))); }), [reload]);
+  const entry = catalog?.find(e => e.op === op);
+  useEffect(() => {
+    if (entry) setParams(Object.fromEntries(Object.entries(entry.params.properties).map(([key, schema]) =>
+      [key, schema.default ?? (schema.type === "array" ? Array(schema.minItems || 2).fill("") : schema.type === "boolean" ? false : "")])));
+  }, [entry]);
+  const submit = useCallback((req: JobRequest) => {
+    setQueue(q => [...q, { id: ++sequence.current, request: req, startedAt: Date.now() }]);
   }, []);
-
-  const entry = useMemo(() => catalog?.find((e) => e.op === selectedOp), [catalog, selectedOp]);
-  const busy = phase.kind === "submitting" || phase.kind === "pending";
-
-  const submit = useCallback(
-    (req: JobRequest) => {
-      lastReq.current = req;
-      run(req);
-    },
-    [run],
-  );
-  const retry = useCallback(() => {
-    if (lastReq.current) run(lastReq.current);
-  }, [run]);
-
-  const generateEntry = catalog?.find((e) => e.op === "generate");
-
-  return (
-    <div className="studio">
-      <header className="topbar">
-        <span className="dot" aria-hidden="true" />
-        <h1>protoBanana Studio</h1>
-        <span className="spacer" />
-        <span className="hint">
-          {entry ? `${entry.label} · ~${entry.typical_latency_s}s` : catalogError ? "catalog unavailable" : "loading…"}
-        </span>
-      </header>
-
-      <aside className="pane left">
-        <nav>
-          <ul className="op-nav">
-            {(catalog || []).map((e) => {
-              const active = e.op === selectedOp;
-              // S1b wires Generate only; the rest render in the shell as the
-              // later Playground slice (S3) with an honest "soon" badge.
-              const wired = e.op === "generate";
-              return (
-                <li key={e.op}>
-                  <button
-                    type="button"
-                    aria-current={active}
-                    disabled={!wired}
-                    onClick={() => wired && setSelectedOp(e.op)}
-                  >
-                    {e.label}
-                    {e.licence?.non_commercial ? <span className="badge-nc">NC</span> : null}
-                    {!wired ? <span className="later">S3</span> : null}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-
-        {catalogError ? (
-          <p className="hint">Could not load the catalog ({catalogError}). The Studio API may be unavailable.</p>
-        ) : !catalog ? (
-          <p className="hint">Loading operations…</p>
-        ) : generateEntry && selectedOp === "generate" ? (
-          <GenerateForm entry={generateEntry} busy={busy} onSubmit={submit} />
-        ) : (
-          <p className="hint">This operation arrives in the S3 Playground slice.</p>
-        )}
-      </aside>
-
-      <main className="pane centre">
-        <Canvas entry={entry || generateEntry} phase={phase} onRetry={retry} />
-      </main>
-
-      <aside className="pane right">
-        <Gallery catalog={catalog} onRerun={submit} />
-      </aside>
-    </div>
-  );
+  const completed = useCallback((item: QueueItem, phase: Extract<Phase, { kind: "done" }>) => {
+    setResult(phase);
+    if (phase.mediaId) setSelected({ media_id: phase.mediaId, parent_id: item.request.parent_id || null,
+      op: item.request.op, alias: item.request.alias || null, params: item.request.params,
+      source: "studio", job_id: null, created: Date.now() / 1000, starred: false, pruned: false });
+    setQueue(q => q.filter(job => job.id !== item.id));
+    setRevision(v => v + 1);
+    reload().catch(e => setError(String(e)));
+  }, [reload]);
+  const current = useImage(result?.url || selected?.media_id);
+  const parent = useImage(selected?.parent_id);
+  const outpaint = useImage(String(params.image || ""));
+  return <div className="studio">
+    <header className="topbar"><span className="dot" /><h1>protoBanana Studio</h1><span className="spacer" /><span className="hint">Playground</span></header>
+    <aside className="pane left">
+      <label className="field">Operation<select aria-label="Operation" value={op} onChange={e => setOp(e.target.value)}>
+        {(catalog || []).filter(e => e.op !== "inpaint").map(e => <option key={e.op} value={e.op}>{e.label}</option>)}
+      </select></label>
+      {error && <p role="alert">{error}</p>}
+      {entry ? <OpForm key={entry.op} entry={entry} current={selected?.media_id} records={records} params={params} setParams={setParams}
+        onSubmit={req => {
+          const source = req.params.image || (Array.isArray(req.params.images) ? req.params.images[0] : undefined);
+          const parentId = records.find(r => r.media_id === source)?.media_id;
+          submit({ ...req, parent_id: parentId || (req.op === "generate" ? selected?.media_id : undefined) });
+        }} /> : <p>Loading operations…</p>}
+    </aside>
+    <main className="pane centre">
+      <Compare key={selected?.media_id} current={current} parent={parent} />
+      {op === "outpaint" && <MarginCanvas url={outpaint} params={params} set={(k, v) => setParams(p => ({ ...p, [k]: v }))} />}
+      {selected && <div className="meta-row"><span>Current: {selected.op} · {selected.media_id}</span>
+        <button type="button" onClick={() => { setSelected(undefined); setResult(undefined); }}>New root</button>
+        {result && <span>done in {result.elapsed}s</span>}
+        {current && <a href={current} target="_blank" rel="noreferrer">Open in new tab</a>}</div>}
+      <QueueStrip items={queue} catalog={catalog || []} onDone={completed} onCancel={id => setQueue(q => q.filter(j => j.id !== id))} />
+    </main>
+    <aside className="pane right"><Lineage records={records} selected={selected?.media_id} onSelect={rec => { setSelected(rec); setResult(undefined); }} onBranch={submit} />
+      <Gallery revision={revision} catalog={catalog} onRerun={submit} /></aside>
+  </div>;
 }

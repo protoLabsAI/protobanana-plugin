@@ -29,7 +29,7 @@ import uuid
 from collections import OrderedDict
 from typing import NamedTuple
 
-from . import catalog_static, client
+from . import catalog, catalog_static, client
 
 log = logging.getLogger(__name__)
 
@@ -173,6 +173,7 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
         # starting position for the queue strip (R2/R3).
         "queue_position": 1 if locked else 0,
         "_task": None,
+        "_override": override,
     }
     _remember(st)
     st["_task"] = asyncio.ensure_future(_run(job_id))
@@ -189,6 +190,13 @@ async def _run(job_id: str) -> None:
         st["status"] = "running"
         st["queue_position"] = 0
         started = time.monotonic()
+        # Resolve in the background so even a cold catalog cannot delay POST /jobs.
+        snapshot = await catalog.build(_cfg)
+        entry = next((e for e in snapshot["ops"] if e["op"] == st["op"]), None)
+        st["_catalog_entry"] = entry
+        if entry and not st["_override"]:
+            tier = "realism" if st["op"] == "identity" and st["params"].get("realism") else st["tier"]
+            st["alias"] = entry["aliases"].get(tier) or entry["aliases"].get("final")
         attempts = 0
         while True:
             attempts += 1
@@ -244,6 +252,34 @@ async def _dispatch(st: dict) -> bytes:
     if alias is None:
         raise ValueError(f"no alias for op {op!r} — unknown operation")
     seed = _seed(params.get("seed"))
+
+    if catalog_static.entry(_cfg, op) is None:
+        entry = st.get("_catalog_entry")
+        if entry is None:
+            raise ValueError(f"unknown op {op!r}")
+        fields = {k: v for k, v in params.items()
+                  if k in entry["params"]["properties"]
+                  and k not in {"alias", "model", "response_format", "prompt", "image",
+                                "mask", "person_image", "images", "image_refs"}}
+        if "seed" in fields:
+            fields["seed"] = seed
+        route = entry["route"]
+        if route == "/images/generations":
+            if params.get("n", 1) != 1:
+                raise ValueError("Studio supports one image per job (n must be 1).")
+            size = fields.pop("size", None) or _cfg.get("default_size") or "1024x1024"
+            return await client.generate(alias, params.get("prompt", ""), size, fields=fields)
+        if route == "/images/edits":
+            if params.get("person_image"):
+                fields["person_image"] = _person_data_url(params["person_image"])
+            return await client.edit(alias, params.get("prompt", ""), _image(params["image"]),
+                                     fields=fields,
+                                     mask=_mask(params["mask"]) if params.get("mask") else None)
+        if route == "/chat/completions":
+            refs = params.get("images") or params.get("image_refs") or []
+            return await client.chat_compose(alias, params.get("prompt", ""),
+                                             [_image(r) for r in refs], fields=fields)
+        raise ValueError(f"unsupported catalog route {route!r}")
 
     if op == "generate":
         if params.get("n", 1) != 1:

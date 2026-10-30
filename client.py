@@ -43,7 +43,7 @@ def _first_b64(payload: dict) -> bytes:
 
 
 async def generate(model: str, prompt: str, size: str, *, seed: int | None = None,
-                   negative_prompt: str | None = None) -> bytes:
+                   negative_prompt: str | None = None, fields: dict | None = None) -> bytes:
     payload: dict = {"model": model, "prompt": prompt, "size": size, "n": 1,
                      "response_format": "b64_json"}
     # LiteLLM (1.83) drops the OpenAI-standard `size` before it reaches a
@@ -55,6 +55,8 @@ async def generate(model: str, prompt: str, size: str, *, seed: int | None = Non
         payload["width"], payload["height"] = w, h
     except (ValueError, AttributeError):
         pass
+    payload.update({k: v for k, v in (fields or {}).items()
+                    if k not in {"model", "prompt", "n", "response_format"} and v is not None})
     if seed is not None:
         payload["seed"] = seed
     if negative_prompt:
@@ -80,13 +82,16 @@ async def edit(model: str, prompt: str, image: bytes, *, fields: dict | None = N
         return _first_b64(resp.json())
 
 
-async def chat_compose(model: str, prompt: str, images: list[bytes]) -> bytes:
+async def chat_compose(model: str, prompt: str, images: list[bytes], *,
+                       fields: dict | None = None) -> bytes:
     content: list[dict] = [{"type": "text", "text": prompt}]
     for raw in images:
         b64 = base64.b64encode(raw).decode()
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"}})
     payload = {"model": model, "messages": [{"role": "user", "content": content}]}
+    payload.update({k: v for k, v in (fields or {}).items()
+                    if k not in {"model", "messages"} and v is not None})
     async with _client() as client:
         resp = await client.post("/chat/completions", json=payload)
         resp.raise_for_status()

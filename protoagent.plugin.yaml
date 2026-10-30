@@ -63,6 +63,8 @@ config:
   identity_model: protolabs/krea2-identity-edit
   realism_identity_model: protolabs/krea2-identity-edit-realism
   default_size: 1024x1024
+  catalog_timeout_s: 5
+  catalog_ttl_s: 60
   timeout_s: 300
   show_model: true     # attach results via multimodal_tool_result (#1930) so a vision model sees them
   studio_retry_on_524: false   # off by default: a 524 means the ComfyUI job is still running, so an auto-retry would stack a second GPU job (protoBanana#52)
@@ -78,6 +80,8 @@ settings:
   - { key: identity_model, label: "Identity-edit model", type: string, description: "Krea 2 identity-edit alias (stem krea2_* on the gateway)." }
   - { key: realism_identity_model, label: "Realism identity model", type: string, description: "Alias used when identity_edit is called with realism=true — realism-LoRA variant for photographic human/portrait results." }
   - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
+  - { key: catalog_timeout_s, label: "Catalog timeout (s)", type: number, description: "Short gateway catalog fetch timeout before using the static schema." }
+  - { key: catalog_ttl_s, label: "Catalog cache TTL (s)", type: number, description: "Refresh the gateway catalog after this many seconds; zero disables caching." }
   - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }
   - { key: show_model, label: "Show results to the model", type: bool, description: "Attach generated images to the tool result so a vision model can critique its own output (capped at 2 MiB/image by core)." }
   - { key: studio_retry_on_524, label: "Studio: retry once on gateway timeout", type: bool, description: "When a Studio render returns HTTP 524 (the gateway's ~100s Cloudflare cap), retry it once after a backoff. Off by default: the original ComfyUI job keeps running, so a retry stacks a second GPU job (protoBanana#52)." }

@@ -60,8 +60,8 @@ export function OpForm({ entry, current, records, onSubmit, params, setParams }:
   const [tier, setTier] = useState(entry.default_tier || "final");
   const [alias, setAlias] = useState("");
   const set = (key: string, value: unknown) => setParams({ ...params, ...(key === "image" && entry.op === "inpaint" ? { mask: "" } : {}), [key]: value });
-  const selectedAlias = alias || entry.aliases[params.realism ? "realism" : tier] || "";
-  return <form className="form" onSubmit={e => { e.preventDefault(); onSubmit({ op: entry.op, tier, alias: alias || undefined, params }); }}>
+  const selectedAlias = alias || entry.aliases[entry.op === "identity" && params.realism ? "realism" : tier] || entry.aliases.final || "";
+  return <form className="form" onSubmit={e => { e.preventDefault(); onSubmit({ op: entry.op, tier, alias: selectedAlias || undefined, params }); }}>
     <div className="toggle" role="group" aria-label="Quality tier">{["draft", "final"].map(t =>
       <button key={t} type="button" aria-pressed={tier === t} onClick={() => setTier(t)}>{t === "draft" ? "Draft" : "Final"}</button>)}</div>
     <small className="desc">{selectedAlias}</small>

@@ -70,9 +70,37 @@ async def fetch_gateway_catalog(cfg: dict) -> dict:
         resp = await client.get(_CATALOG_PATH)
         resp.raise_for_status()
         body = resp.json()
+    if isinstance(body, dict) and "ops" not in body and isinstance(body.get("aliases"), list):
+        body = {**body, "ops": _alias_entries(body["aliases"])}
     if not isinstance(body, dict) or not isinstance(body.get("ops"), list):
         raise RuntimeError(f"gateway catalog has no ops list: {str(body)[:200]}")
     return body
+
+
+def _alias_entries(entries: list) -> list:
+    """Adapt the backend v1 per-alias records to Studio's operation picker.
+
+    Keep each alias's own schema and licence, including multiple aliases in the
+    same tier. These entries execute by their documented gateway route.
+    """
+    result = []
+    defaults = {}
+    names = {"gen": "generate", "bgremove": "remove_background", "multiref": "compose"}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("alias"), str):
+            continue
+        alias = entry["alias"]
+        op = entry.get("op", "workflow")
+        tier = entry.get("tier") or "final"
+        studio_op = names.get(op, op)
+        if studio_op in catalog_static.OPS:
+            defaults.setdefault(studio_op, {}).setdefault(tier, alias)
+        result.append({**entry, "op": f"{op}:{alias}", "label": alias,
+                       "aliases": {tier: alias, "final": alias}, "default_tier": tier})
+    # Refresh the built-in forms' aliases as well, retaining their specialised
+    # input widgets and image processing. Per-alias entries above expose the full
+    # backend schema and variants independently.
+    return [{"op": op, "aliases": aliases} for op, aliases in defaults.items()] + result
 
 
 async def _live_catalog(cfg: dict) -> dict:
@@ -104,13 +132,25 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
             by_op[e["op"]] = e
             order.append(e["op"])
     for e in gateway_ops:
-        if not isinstance(e, dict) or not e.get("op"):
+        if not isinstance(e, dict) or not isinstance(e.get("op"), str) or not e["op"]:
             continue
         op = e["op"]
-        if op not in by_op:
-            order.append(op)
         merged = dict(by_op.get(op, {}))
         merged.update({k: v for k, v in e.items() if v is not None})
+        schema = merged.get("params")
+        aliases = merged.get("aliases")
+        if (not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict)
+                or not all(isinstance(v, dict) for v in schema["properties"].values())
+                or not isinstance(schema.get("required", []), list)
+                or not isinstance(aliases, dict) or not aliases
+                or not all(isinstance(v, str) and v for v in aliases.values())
+                or merged.get("route") not in {
+                    "/images/generations", "/images/edits", "/chat/completions"}):
+            continue
+        merged["params"] = {**schema, "required": schema.get("required", [])}
+        merged.setdefault("label", op)
+        if op not in by_op:
+            order.append(op)
         by_op[op] = merged
     return [by_op[op] for op in order]
 
@@ -125,7 +165,8 @@ def _known_aliases(gateway: dict) -> set:
             known.add(a)
     for e in gateway.get("ops") or []:
         if isinstance(e, dict):
-            for v in (e.get("aliases") or {}).values():
+            aliases = e.get("aliases")
+            for v in (aliases.values() if isinstance(aliases, dict) else []):
                 if isinstance(v, str):
                     known.add(v)
     return known

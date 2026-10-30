@@ -350,3 +350,155 @@ def test_catalog_route_falls_back_when_unreachable(monkeypatch):
             assert len(body["ops"]) == 8
 
     asyncio.run(scenario())
+
+
+def test_gateway_only_operations_render_through_documented_routes(monkeypatch):
+    import base64
+
+    from test_jobs import PNG_1x1, _data_url
+
+    for route in ('/images/edits', '/images/generations', '/chat/completions'):
+        mod, reg = _load()
+        entry = _upscale_op()
+        entry['route'] = route
+        entry['params']['properties']['images'] = {'type': 'array'}
+        calls = []
+
+        class Gateway:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def get(self, path):
+                return _Resp({'ops': [entry]})
+
+            async def post(self, path, **kwargs):
+                calls.append((path, kwargs))
+                encoded = base64.b64encode(PNG_1x1).decode()
+                return _Resp({'data': [{'b64_json': encoded}], 'choices': [
+                    {'message': {'content': f'data:image/png;base64,{encoded}'}}]})
+
+        monkeypatch.setattr(sys.modules['graph.sdk'], 'gateway_client', lambda **kw: Gateway())
+
+        async def scenario():
+            async with await _client(_app(reg)) as ac:
+                response = await ac.post('/api/plugins/protobanana/jobs', json={
+                    'op': 'upscale', 'params': {'image': _data_url(PNG_1x1),
+                                              'images': [_data_url(PNG_1x1)] * 2, 'scale': 4}})
+                assert response.status_code == 202
+                job_id = response.json()['job_id']
+                await mod.jobs._jobs[job_id]['_task']
+                assert mod.jobs.get_state(job_id)['status'] == 'done'
+                assert reg.saved_media[-1][2]['alias'] == entry['aliases']['final']
+                assert any(topic == 'protobanana.job.done' for topic, _ in reg.emitted)
+
+        asyncio.run(scenario())
+        path, request = calls[0]
+        assert path == route
+        payload = request.get('json', request.get('data'))
+        assert payload['model'] == entry['aliases']['final']
+        assert str(payload['scale']) == '4'
+
+
+def test_displayed_gateway_alias_is_rendered_and_override_wins(monkeypatch):
+    from test_jobs import PNG_1x1
+
+    mod, reg = _load({'fast_gen_model': DRIFT_ALIAS})
+    _install_gateway(monkeypatch, {'ops': [
+        {'op': 'generate', 'aliases': {'draft': TURBO_ALIAS, 'final': 'live-final'}}]}, [])
+    rendered = []
+
+    async def generate(model, *args, **kwargs):
+        rendered.append(model)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, 'generate', generate)
+
+    async def scenario():
+        catalog = await mod.catalog.build(reg.config)
+        displayed = next(e for e in catalog['ops'] if e['op'] == 'generate')['aliases']['draft']
+        for override in (None, displayed, 'manual-model'):
+            job_id = mod.jobs.submit('generate', {'prompt': 'fox'}, tier='draft', alias=override)
+            await mod.jobs._jobs[job_id]['_task']
+            assert mod.jobs.get_state(job_id)['status'] == 'done'
+        assert rendered == [displayed, displayed, 'manual-model']
+
+    asyncio.run(scenario())
+
+
+def test_backend_v1_alias_records_keep_distinct_forms(monkeypatch):
+    mod, _ = _load()
+    entry = _upscale_op()
+    entries = [{**entry, 'alias': alias, 'tier': 'final'} for alias in ('upscale-v1', 'upscale-v2')]
+    entries[1]['params'] = {'properties': {'strength': {'type': 'number'}}}
+    _install_gateway(monkeypatch, {'version': 1, 'aliases': entries, 'workflows_hash': 'v1'}, [])
+    result = asyncio.run(mod.catalog.build({}))
+    assert result['source'] == 'gateway'
+    assert result['workflows_hash'] == 'v1'
+    ops = {e['op']: e for e in result['ops']}
+    assert ops['upscale:upscale-v1']['aliases']['final'] == 'upscale-v1'
+    assert 'strength' in ops['upscale:upscale-v2']['params']['properties']
+    assert ops['upscale:upscale-v2']['params']['required'] == []
+
+
+def test_invalid_gateway_entries_do_not_break_forms(monkeypatch):
+    mod, _ = _load()
+    bad = _upscale_op()
+    del bad['params']
+    _install_gateway(monkeypatch, {'ops': [bad, {'op': 'generate', 'params': {}}]}, [])
+    result = asyncio.run(mod.catalog.build({}))
+    assert result['ops'] == mod.catalog_static.build_catalog({})
+
+
+def test_v1_catalog_job_returns_before_catalog_fetch_and_renders(monkeypatch):
+    from test_jobs import PNG_1x1, _data_url
+
+    mod, reg = _load()
+    entry = {**_upscale_op(), 'alias': 'gateway-upscale', 'tier': 'final'}
+    calls = []
+
+    async def scenario():
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async def fetch(cfg):
+            started.set()
+            await release.wait()
+            return {'ops': mod.catalog._alias_entries([entry])}
+
+        async def edit(alias, prompt, image, **kwargs):
+            calls.append((alias, kwargs['fields']))
+            return PNG_1x1
+
+        monkeypatch.setattr(mod.catalog, 'fetch_gateway_catalog', fetch)
+        monkeypatch.setattr(mod.jobs.client, 'edit', edit)
+        async with await _client(_app(reg)) as ac:
+            response = await asyncio.wait_for(ac.post('/api/plugins/protobanana/jobs', json={
+                'op': 'upscale:gateway-upscale',
+                'params': {'image': _data_url(PNG_1x1), 'scale': 3}}), timeout=1)
+            assert response.status_code == 202
+            job_id = response.json()['job_id']
+            await asyncio.wait_for(started.wait(), timeout=1)
+            assert not calls
+            release.set()
+            await mod.jobs._jobs[job_id]['_task']
+            assert mod.jobs.get_state(job_id)['status'] == 'done'
+            assert calls == [('gateway-upscale', {'scale': 3})]
+
+    asyncio.run(scenario())
+
+
+def test_backend_v1_updates_builtin_alias_defaults(monkeypatch):
+    mod, _ = _load()
+    _install_gateway(monkeypatch, {'aliases': [
+        {'op': 'gen', 'alias': TURBO_ALIAS, 'tier': 'draft',
+         'route': '/images/generations', 'params': {'properties': {}}},
+        {'op': 'gen', 'alias': 'live-final', 'tier': 'final',
+         'route': '/images/generations', 'params': {'properties': {}}},
+    ]}, [])
+    result = asyncio.run(mod.catalog.build({'fast_gen_model': DRIFT_ALIAS}))
+    gen = next(e for e in result['ops'] if e['op'] == 'generate')
+    assert gen['aliases'] == {'draft': TURBO_ALIAS, 'final': 'live-final'}
+    assert any(DRIFT_ALIAS in warning for warning in result['warnings'])

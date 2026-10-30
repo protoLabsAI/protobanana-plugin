@@ -147,12 +147,14 @@ export function Gallery({
   compact,
   selectedId,
   onSelect,
+  onRecords,
 }: {
   catalog: CatalogEntry[] | null;
   revision?: number;
   compact?: boolean;
   selectedId?: string;
   onSelect: (rec: HistoryRecord) => void;
+  onRecords?: (records: HistoryRecord[]) => void;
 }) {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -204,6 +206,12 @@ export function Gallery({
   useEffect(() => {
     reload();
   }, [reload, revision]);
+
+  // Surface the loaded records so the shell can offer them to the Compose
+  // reference slots ("pick from History", §4.3) without a second fetch.
+  useEffect(() => {
+    onRecords?.(records);
+  }, [records, onRecords]);
 
   // Bus-driven refresh (ADR 0039): a fresh render — agent or studio — joins
   // History within one bus tick.

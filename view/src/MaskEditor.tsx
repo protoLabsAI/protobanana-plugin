@@ -16,6 +16,22 @@ export function exportMask(selection: HTMLCanvasElement): string {
   return output.toDataURL("image/png");
 }
 
+/** Resolve the DS accent token to an [r,g,b] triple for the mask tint (design
+ *  §10: the tint is `--pl-color-accent` at 35%). Falls back to the token's own
+ *  literal (#6164ef) when no kit CSS defines the variable (standalone / tests). */
+function useAccentRgb(): [number, number, number] {
+  const [rgb, setRgb] = useState<[number, number, number]>([97, 100, 239]);
+  useEffect(() => {
+    const probe = document.createElement("span");
+    probe.style.cssText = "color:var(--accent);position:absolute;visibility:hidden";
+    document.body.appendChild(probe);
+    const m = getComputedStyle(probe).color.match(/\d+/g);
+    document.body.removeChild(probe);
+    if (m && m.length >= 3) setRgb([+m[0], +m[1], +m[2]]);
+  }, []);
+  return rgb;
+}
+
 export function MaskEditor({ source, onChange }: { source: string; onChange: (mask: string) => void }) {
   const [image, setImage] = useState<HTMLImageElement>();
   const [selection, setSelection] = useState<HTMLCanvasElement>();
@@ -27,6 +43,8 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
   const undo = useRef<ImageData[]>([]);
   const last = useRef<{ x: number; y: number }>();
   const changed = useRef(onChange); changed.current = onChange;
+  const [r, g, b] = useAccentRgb();
+  const tint = `rgb(${r}, ${g}, ${b})`;
   useEffect(() => {
     let alive = true; let blob: string | undefined;
     setImage(undefined); setSelection(undefined); setError(""); undo.current = [];
@@ -54,13 +72,19 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
     const ctx = selection.getContext("2d")!;
     ctx.save();
     ctx.globalCompositeOperation = eraser ? "destination-out" : "source-over";
-    ctx.strokeStyle = "#ff4080"; ctx.lineWidth = size; ctx.lineCap = "round";
+    ctx.strokeStyle = tint; ctx.lineWidth = size; ctx.lineCap = "round";
     ctx.filter = feather ? `blur(${feather}px)` : "none";
     ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(point.x + 0.01, point.y);
     ctx.stroke(); ctx.restore(); last.current = point; redraw(v => v + 1);
   };
-  return <fieldset className="mask-editor"><legend>Paint mask</legend>
-    <p>Pink = edit. Exported PNG: transparent = edit, opaque = preserve.</p>
+  // `[` / `]` resize the brush (design §10). Handled on the fieldset so any
+  // focused tool/stage inside mask mode drives it.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "[") { e.preventDefault(); setSize(s => Math.max(1, s - 8)); }
+    else if (e.key === "]") { e.preventDefault(); setSize(s => Math.min(300, s + 8)); }
+  };
+  return <fieldset className="mask-editor" onKeyDown={onKeyDown}><legend>Paint mask</legend>
+    <p className="hint">Tinted area = edit. Exported PNG: transparent = edit, opaque = preserve. <kbd>[</kbd>/<kbd>]</kbd> resize the brush.</p>
     <div className="slot-actions">
       <button type="button" aria-pressed={!eraser} onClick={() => setEraser(false)}>Brush</button>
       <button type="button" aria-pressed={eraser} onClick={() => setEraser(true)}>Eraser</button>
@@ -68,7 +92,7 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
         snapshot(); const ctx = selection!.getContext("2d")!;
         const pixels = ctx.getImageData(0, 0, selection!.width, selection!.height);
         for (let i = 0; i < pixels.data.length; i += 4) {
-          pixels.data[i] = 255; pixels.data[i + 1] = 64; pixels.data[i + 2] = 128;
+          pixels.data[i] = r; pixels.data[i + 1] = g; pixels.data[i + 2] = b;
           pixels.data[i + 3] = 255 - pixels.data[i + 3];
         }
         ctx.putImageData(pixels, 0, 0); publish();
@@ -83,7 +107,7 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
     <label>Brush size (source px)<input aria-label="Brush size" type="range" min="1" max="300" value={size} onChange={e => setSize(+e.target.value)} /></label>
     <label>Feather (source px)<input aria-label="Feather" type="range" min="0" max="50" value={feather} onChange={e => setFeather(+e.target.value)} /></label>
     {error && <p role="alert">{error}</p>}
-    {image && selection && <div style={{ touchAction: "none" }} aria-label="Mask canvas">
+    {image && selection && <div className="mask-canvas" style={{ touchAction: "none" }} aria-label="Mask canvas">
       <Stage width={image.naturalWidth * scale} height={image.naturalHeight * scale}
         onPointerDown={e => {
           e.evt.preventDefault();
@@ -98,7 +122,7 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
         onPointerLeave={() => { if (last.current) { last.current = undefined; publish(); } }}>
         <Layer scaleX={scale} scaleY={scale}>
           <CanvasImage image={image} />
-          <CanvasImage key={revision} image={selection} opacity={0.6} />
+          <CanvasImage key={revision} image={selection} opacity={0.35} />
         </Layer>
       </Stage>
     </div>}

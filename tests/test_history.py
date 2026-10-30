@@ -27,6 +27,22 @@ PNG_1x1 = base64.b64decode(
 )
 
 
+def _png(color, size=(16, 16)) -> bytes:
+    """A small solid-colour PNG (used so an edit's gateway result differs from
+    its input and imaging.unchanged() doesn't short-circuit the tool)."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _data_url(raw: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(raw).decode()
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     """A registered plugin whose history index + media store are isolated tmp
@@ -247,6 +263,88 @@ def test_locked_seed_resubmits_identical_params(env, monkeypatch):
     asyncio.run(scenario())
     assert seeds[0] == seeds[1] == 12345
     assert seeds[2] is None
+
+
+# ------------- r1/r5 (blocking): agent records re-run from the Gallery ---------
+
+
+def test_agent_image_records_are_rerunnable(env, monkeypatch):
+    """The blocking finding: re-running an agent-made image record from the
+    Gallery used to fail — record_agent dropped the image ref, so jobs._dispatch
+    raised KeyError on params['image'] (and fed compose an empty list). Each
+    agent image tool must now write a record whose params carry the input ref in
+    jobs._dispatch's shape, so the Gallery re-run (op + params + alias) dispatches
+    and completes."""
+    mod = env.mod
+    white, black = _png((255, 255, 255)), _png((0, 0, 0))
+
+    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
+        return black  # distinct from the white input → imaging.unchanged() is False
+
+    async def fake_compose(model, prompt, images):
+        assert images, "compose must receive its reference images, not an empty list"
+        return black
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    monkeypatch.setattr(mod.client, "chat_compose", fake_compose)
+
+    src = _data_url(white)
+
+    async def scenario():
+        await mod.tools.edit_image.ainvoke({"image_ref": src, "prompt": "make it night"})
+        await mod.tools.region_edit.ainvoke({"image_ref": src, "region": "the sky", "prompt": "red"})
+        await mod.tools.identity_edit.ainvoke({"image_ref": src, "prompt": "her", "person_ref": src})
+        await mod.tools.remove_background.ainvoke({"image_ref": src})
+        await mod.tools.compose_images.ainvoke({"image_refs": [src, src], "prompt": "combine"})
+        await mod.tools.outpaint_image.ainvoke({"image_ref": src, "prompt": "more sky", "left": 64})
+
+        by_op = {r["op"]: r for r in mod.history.read(limit=50)["records"]}
+        assert set(by_op) >= {"edit", "region_edit", "identity",
+                              "remove_background", "compose", "outpaint"}
+        for op in ("edit", "region_edit", "identity", "remove_background", "outpaint"):
+            assert by_op[op]["params"].get("image"), f"{op} record dropped its image ref"
+        assert by_op["compose"]["params"].get("images"), "compose record kept no refs"
+
+        # Re-run each agent record exactly as Gallery.rerun does: op + params +
+        # the recorded alias. On ONE event loop so the per-operator lock binds to
+        # it; sequential (await each task) so the single in-flight slot is free.
+        for op, rec in by_op.items():
+            jid = mod.jobs.submit(rec["op"], dict(rec["params"]), alias=rec["alias"])
+            await _task(mod, jid)
+            st = mod.jobs.get_state(jid)
+            assert st["status"] == "done", f"re-run of {op} failed: {st}"
+
+    asyncio.run(scenario())
+
+
+def test_agent_record_lineage_and_seed(env):
+    """record_agent derives parent_id from the input ref (a bare id or a /media/
+    URL, the first of a compose list) and keeps the ref + seed in params — the
+    agent-edit lineage and locked-seed re-run contract the round-1 review flagged
+    as untested. Only the two meta-only keys (tool→op, model→alias) are stripped."""
+    mod = env.mod
+    mod.history.record_agent("child1", {
+        "tool": "edit_image", "model": "protolabs/qwen-image-edit",
+        "image": "parent-abc", "prompt": "night", "seed": 7, "keep_transparency": True,
+    })
+    mod.history.record_agent("child2", {
+        "tool": "region_edit", "model": "protolabs/qwen-image-region-edit",
+        "image": "/media/parent-def.png?sig=x", "region": "sky", "prompt": "red", "seed": -1,
+    })
+    mod.history.record_agent("child3", {
+        "tool": "compose_images", "model": "protolabs/qwen-image-chat",
+        "images": ["srcA", "srcB"], "prompt": "combine",
+    })
+
+    recs = {r["media_id"]: r for r in mod.history.read()["records"]}
+    assert recs["child1"]["op"] == "edit" and recs["child1"]["alias"] == "protolabs/qwen-image-edit"
+    assert recs["child1"]["parent_id"] == "parent-abc"      # lineage from the input ref
+    assert recs["child1"]["params"]["image"] == "parent-abc"  # ref kept for re-run
+    assert recs["child1"]["params"]["seed"] == 7              # locked seed carried
+    assert "tool" not in recs["child1"]["params"] and "model" not in recs["child1"]["params"]
+    assert recs["child2"]["parent_id"] == "parent-def"       # from the /media/ URL
+    assert recs["child3"]["parent_id"] == "srcA"             # first compose ref
+    assert recs["child3"]["params"]["images"] == ["srcA", "srcB"]
 
 
 # --------------------------------------- r6: a history write never raises

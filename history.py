@@ -185,17 +185,36 @@ def _media_id_of(ref) -> str | None:
     return None
 
 
+def _primary_ref(params: dict):
+    """The input image reference a record was derived from — ``image`` for the
+    single-input ops, else the first of a ``images``/``image_refs`` list (compose).
+    Used for lineage and so the ref survives into the re-run params."""
+    ref = params.get("image")
+    if ref is None:
+        refs = params.get("images") or params.get("image_refs")
+        if isinstance(refs, (list, tuple)) and refs:
+            ref = refs[0]
+    return ref
+
+
 def record_agent(media_id: str, meta: dict | None) -> None:
     """Write a ``source="agent"`` record from an agent tool's ``save_media``
     meta. Wrapped so a malformed meta (or a raising ``append``) can never
-    propagate into the tool (tools never raise)."""
+    propagate into the tool (tools never raise).
+
+    The record's ``params`` is the agent meta minus the two meta-only keys
+    (``tool`` → ``op``, ``model`` → ``alias``). Everything else — crucially the
+    input image reference (``image``/``images``) and the ``seed`` — is KEPT, in
+    the exact shape ``jobs._dispatch`` consumes, so a Gallery re-run of an agent
+    record resubmits a working job (and a locked seed reproduces) instead of
+    dying on a missing ``image`` (design §3.1 / S2)."""
     try:
         meta = dict(meta or {})
         tool = meta.get("tool") or ""
-        params = {k: v for k, v in meta.items() if k not in ("tool", "model", "source")}
+        params = {k: v for k, v in meta.items() if k not in ("tool", "model")}
         append({
             "media_id": media_id,
-            "parent_id": _media_id_of(meta.get("source")),
+            "parent_id": _media_id_of(_primary_ref(params)),
             "op": _TOOL_OP.get(tool, tool or "unknown"),
             "alias": meta.get("model"),
             "params": params,

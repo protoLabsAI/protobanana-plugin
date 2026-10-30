@@ -473,7 +473,7 @@ export function App() {
 
   // Esc leaves the active mode (design §4.3 / §10).
   const onRootKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" && mode !== null) leaveMode();
+    if (e.key === "Escape" && tab === "playground" && mode !== null) leaveMode();
   };
 
   const submit = useCallback((req: JobRequest) => {

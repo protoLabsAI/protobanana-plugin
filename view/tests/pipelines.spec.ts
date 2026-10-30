@@ -167,11 +167,11 @@ const kitCss = readFileSync(fileURLToPath(new URL("./fixtures/plugin-kit.generat
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#e8bb65"/><circle cx="320" cy="240" r="120" fill="#504550"/></svg>';
 
-interface SetupResult { save: Record<string, unknown>[]; run: { id: string; inputs: unknown }[]; resume: string[] }
+interface SetupResult { save: Record<string, unknown>[]; run: { id: string; inputs: unknown }[]; resume: string[]; polls: number; historyReads: number }
 
-async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: unknown[] } = {}): Promise<SetupResult> {
+async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: unknown[]; pollStatus?: "done" | "failed" } = {}): Promise<SetupResult> {
   const theme = opts.theme || "light";
-  const result: SetupResult = { save: [], run: [], resume: [] };
+  const result: SetupResult = { save: [], run: [], resume: [], polls: 0, historyReads: 0 };
   await page.addInitScript((seed) => {
     (window as any).__kb = [];
     window.addEventListener("message", (e) => {
@@ -201,7 +201,10 @@ async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: 
     const method = route.request().method();
     if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: catalog, source: "gateway" } });
     if (path.endsWith("/image")) return route.fulfill({ body: svg, contentType: "image/svg+xml" });
-    if (path.endsWith("/history")) return route.fulfill({ json: { records: opts.history ?? [], next_cursor: null } });
+    if (path.endsWith("/history")) {
+      result.historyReads++;
+      return route.fulfill({ json: { records: opts.history ?? [], next_cursor: null } });
+    }
     if (path.endsWith("/pipelines") && method === "POST") {
       const body = route.request().postDataJSON();
       result.save.push(body);
@@ -218,8 +221,9 @@ async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: 
       return route.fulfill({ json: { resumed: true } });
     }
     if (path.includes("/runs/")) {
+      result.polls++;
       // Poll backstop: a live run with no node rows, so only the bus drives state.
-      return route.fulfill({ json: { run_id: "run-1", pipeline: "demo", status: "running", order: [], output: null, output_media_id: null, cache_hits: 0, error: null, nodes: {} } });
+      return route.fulfill({ json: { run_id: "run-1", pipeline: "demo", status: opts.pollStatus ?? "running", order: [], output: null, output_media_id: null, cache_hits: 0, error: null, nodes: {} } });
     }
     return route.fulfill({ json: {} });
   });
@@ -295,6 +299,7 @@ test("run → each node shows its thumbnail from the bus events", async ({ page 
 });
 
 test("a recoverable node failure shows Re-run from here, which resumes from that step", async ({ page }) => {
+  await page.clock.install();
   const captured = await setup(page, { seed: chain2 });
   await openPipelines(page);
   await page.locator(".react-flow__node").filter({ hasText: "Generate" }).click();
@@ -310,6 +315,10 @@ test("a recoverable node failure shows Re-run from here, which resumes from that
   await rerun.click();
   await expect.poll(() => captured.resume.length).toBe(1);
   expect(captured.resume[0]).toContain("from_step=edit1");
+  await expect(page.locator(".pbx-graph-toolbar .rendering-badge")).toBeVisible();
+  const polls = captured.polls;
+  await page.clock.fastForward(2600);
+  await expect.poll(() => captured.polls).toBeGreaterThan(polls);
 });
 
 // R7: with the vendored kit CSS, geometry holds at 1440 and 760, light + dark.
@@ -469,3 +478,111 @@ test("after the round trip, Inpaint still paints a mask and Outpaint margins sti
   await left.fill("64");
   await expect(left).toHaveValue("64");
 });
+
+
+// Renaming must keep both reference wires and template wires, including across
+// successive keystrokes, and refuse collisions with another input.
+test("input rename preserves selection, wires and saved positions", async ({ page }) => {
+  const seed: Spec = {
+    id: "rename", inputs: { pic: "image", subject: "text" },
+    steps: [{ id: "edit1", op: "edit", image: "inputs.pic", params: { prompt: "{{inputs.subject}}" } }],
+    ui: { positions: { [inputNodeId("pic")]: { x: 20, y: 30 }, [inputNodeId("subject")]: { x: 20, y: 180 }, edit1: { x: 350, y: 60 } } },
+  };
+  const captured = await setup(page, { seed });
+  await openPipelines(page);
+  await page.locator(".react-flow__node").filter({ hasText: "pic" }).click();
+  const name = page.getByRole("textbox", { name: "Input name", exact: true });
+  await name.fill("photo");
+  await name.press("End");
+  await name.pressSequentially("_new");
+  await expect(name).toHaveValue("photo_new");
+  await name.fill("subject");
+  await expect(name).toHaveValue("photo_new");
+  await page.locator(".react-flow__node").filter({ hasText: "subject" }).click();
+  await expect(name).toHaveValue("subject");
+  await name.fill("caption");
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => captured.save.length).toBe(1);
+  const saved = captured.save[0] as unknown as Spec;
+  expect(saved.steps[0].image).toBe("photo_new");
+  expect(saved.steps[0].params?.prompt).toBe("{{inputs.caption}}");
+  expect(saved.ui?.positions?.[inputNodeId("photo_new")]).toEqual({ x: 20, y: 30 });
+  expect(validateSpec(saved)).toEqual({ ok: true, error: "" });
+});
+
+for (const terminal of ["done", "failed"] as const) {
+  for (const source of ["bus", "poll"] as const) {
+    test(`terminal ${terminal} via ${source} stops polling and refreshes history once`, async ({ page }) => {
+      await page.clock.install();
+      const captured = await setup(page, { seed: chain2, pollStatus: source === "poll" ? terminal : undefined });
+      await openPipelines(page);
+      await page.locator(".react-flow__node").filter({ hasText: "Generate" }).click();
+      await page.getByRole("button", { name: "Run", exact: true }).click();
+      await expect.poll(() => captured.run.length).toBe(1);
+      const before = captured.historyReads;
+      if (source === "bus") {
+        await bus(page, "protobanana.pipeline.run.done", { run_id: "run-1", status: terminal });
+      } else {
+        await page.clock.fastForward(2600);
+      }
+      await expect.poll(() => captured.historyReads).toBe(before + 2);
+      const reads = captured.historyReads;
+      const polls = captured.polls;
+      await page.clock.fastForward(10000);
+      expect(captured.polls).toBe(polls);
+      expect(captured.historyReads).toBe(reads);
+    });
+  }
+
+  test(`inspector edits after ${terminal} save and run the updated spec`, async ({ page }) => {
+    const captured = await setup(page, { seed: chain2 });
+    await openPipelines(page);
+    await page.locator(".react-flow__node").filter({ hasText: "Edit" }).click();
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await expect.poll(() => captured.run.length).toBe(1);
+    await bus(page, "protobanana.pipeline.run.done", { run_id: "run-1", status: terminal });
+    await page.getByRole("textbox", { name: "Prompt", exact: true }).fill("make it green");
+    await page.getByRole("button", { name: "Run from here", exact: true }).click();
+    await expect.poll(() => captured.run.length).toBe(2);
+    expect(captured.resume).toEqual([]);
+    expect(captured.save).toHaveLength(2);
+    const saved = captured.save[1] as unknown as Spec;
+    expect(saved.steps.find((s) => s.id === "edit1")?.params?.prompt).toBe("make it green");
+  });
+}
+
+for (const mode of ["Inpaint", "Outpaint"]) {
+  test(`Escape in Pipelines preserves Playground ${mode} edits`, async ({ page }) => {
+    await setup(page, { history: records });
+    await page.locator(".g-thumb").first().click();
+    await page.getByRole("toolbar", { name: "Image actions", exact: true })
+      .getByRole("button", { name: mode, exact: true }).click();
+    let mask = "";
+    const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+    if (mode === "Inpaint") {
+      await expect(canvas).toBeVisible();
+      const cb = (await canvas.boundingBox())!;
+      await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(cb.x + cb.width / 2 + 30, cb.y + cb.height / 2 + 30, { steps: 3 });
+      await page.mouse.up();
+      mask = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+    } else {
+      await page.getByLabel("Left", { exact: true }).fill("96");
+    }
+    await openPipelines(page);
+    await page.getByRole("button", { name: "Add node", exact: true }).focus();
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: "Playground", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
+    if (mode === "Inpaint") {
+      await expect(canvas).toBeVisible();
+      expect(await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(mask);
+    } else {
+      await expect(page.getByLabel("Left", { exact: true })).toHaveValue("96");
+    }
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: `Leave ${mode} mode`, exact: true })).toHaveCount(0);
+  });
+}

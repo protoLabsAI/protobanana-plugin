@@ -554,16 +554,26 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   }, []);
 
   const patchSelected = useCallback((patch: Partial<OpNodeData | InputNodeData>) => {
-    setNodes((ns) => ns.map((n) => {
-      if (n.id !== selectedId) return n;
-      const data = n.data as unknown as NodeData;
-      if ("name" in patch && data.kind === "input") {
-        // Renaming an input also moves its node id so edges + ui.positions follow.
-        const name = (patch as Partial<InputNodeData>).name || data.name;
-        return { ...n, id: inputNodeId(name), data: { ...data, ...patch } } as unknown as Node;
-      }
-      return { ...n, data: { ...data, ...patch } } as unknown as Node;
-    }));
+    const selected = nodesRef.current.find((n) => n.id === selectedId);
+    if (!selected) return;
+    const data = selected.data as unknown as NodeData;
+    let nextId = selected.id;
+    if ("name" in patch && data.kind === "input") {
+      const name = (patch as Partial<InputNodeData>).name || data.name;
+      nextId = inputNodeId(name);
+      if (nodesRef.current.some((n) => n.id === nextId && n.id !== selected.id)) return;
+      patch = { ...patch, name };
+    }
+    setNodes((ns) => ns.map((n) => n.id === selected.id
+      ? { ...n, id: nextId, data: { ...n.data, ...patch } } as Node : n));
+    if (nextId !== selected.id) {
+      setEdges((es) => es.map((e) => ({
+        ...e,
+        source: e.source === selected.id ? nextId : e.source,
+        target: e.target === selected.id ? nextId : e.target,
+      })));
+      setSelectedId(nextId);
+    }
   }, [selectedId]);
 
   const promote = useCallback((param: string, on: boolean) => {
@@ -656,12 +666,21 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     setRunId(rid);
     setRunStatus("running");
     setError("");
+    let stopped = false;
+    let finished = false;
+    const finish = (status: "done" | "failed") => {
+      if (stopped || finished) return;
+      finished = true;
+      window.clearInterval(poll);
+      setRunStatus(status);
+      onHistoryChanged();
+    };
     const mergeNode = (step: string, patch: Partial<RunNode>) =>
       setRunNodes((prev) => ({ ...prev, [step]: { ...(prev[step] || { id: step } as RunNode), ...patch } }));
 
     const matches = (d: unknown): (Record<string, unknown>) | null => {
       const o = d as Record<string, unknown> | null;
-      return o && typeof o === "object" && o.run_id === rid ? o : null;
+      return !stopped && o && typeof o === "object" && o.run_id === rid ? o : null;
     };
     const offStart = subscribe(BUS.nodeStarted, (d) => { const o = matches(d); if (o) mergeNode(String(o.step), { status: "running", op: String(o.op), alias: (o.alias as string) ?? null }); });
     const offDone = subscribe(BUS.nodeDone, (d) => {
@@ -674,28 +693,29 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     });
     const offRun = subscribe(BUS.runDone, (d) => {
       const o = matches(d); if (!o) return;
-      setRunStatus(o.status === "failed" ? "failed" : "done");
-      onHistoryChanged();
+      finish(o.status === "failed" ? "failed" : "done");
     });
 
     // Poll backstop (ADR 0039): short GET /runs/{id}, never held open; it also
     // fills node state after a view reload.
     const poll = window.setInterval(async () => {
       let st; try { st = await getRun(rid); } catch { return; }
-      if (!st) return;
+      if (!st || stopped || finished) return;
       setRunNodes((prev) => {
         const merged = { ...prev };
         for (const [sid, n] of Object.entries(st.nodes)) merged[sid] = { ...(merged[sid] || {}), ...n };
         return merged;
       });
-      if (st.status === "done" || st.status === "failed") { setRunStatus(st.status); onHistoryChanged(); }
+      if (st.status === "done" || st.status === "failed") finish(st.status);
     }, 2500);
 
-    return () => { offStart(); offDone(); offFail(); offRun(); window.clearInterval(poll); };
+    return () => { stopped = true; offStart(); offDone(); offFail(); offRun(); window.clearInterval(poll); };
   }, [onHistoryChanged]);
 
   const cleanupRun = useRef<() => void>(() => {});
   useEffect(() => () => cleanupRun.current(), []);
+
+  const runSpec = useRef<string | null>(null);
 
   const startRun = useCallback(async () => {
     const spec = await doSave();
@@ -703,16 +723,19 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     try {
       const rid = await runPipeline(spec.id, {});
       cleanupRun.current();
+      runSpec.current = JSON.stringify(spec);
+      setRunNodes({});
       cleanupRun.current = trackRun(rid);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
   }, [doSave, trackRun]);
 
-  // Run from here: resume an existing run (cache serves the untouched upstream),
-  // else a fresh run whose step cache still re-executes only what changed (r2).
+  // Resume only the spec captured by the runner. Edits need a saved fresh run;
+  // the backend step cache still serves unchanged upstream nodes.
   const runFrom = useCallback(async (stepId: string) => {
-    if (runId && (runStatus === "done" || runStatus === "failed")) {
+    if (runId && (runStatus === "done" || runStatus === "failed")
+      && runSpec.current === JSON.stringify(currentSpec())) {
       const ok = await resumeRun(runId, stepId);
       if (ok) {
         setRunStatus("running");
@@ -723,7 +746,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       }
     }
     await startRun();
-  }, [runId, runStatus, trackRun, startRun]);
+  }, [runId, runStatus, trackRun, startRun, currentSpec]);
 
   // Fetch each produced node's thumbnail once (card: per-node thumbnails).
   useEffect(() => {

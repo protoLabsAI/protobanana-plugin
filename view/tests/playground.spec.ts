@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { CatalogEntry, HistoryRecord, JobRequest } from "../src/api";
 
 // Read the real catalog: the browser fixture must evolve with the Python schema.
@@ -593,7 +594,7 @@ test("S5: a focus inbox message selects that image; unknown and spoofed ids are 
   await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
 });
 
-test("S5: History tile sends a draft to the chat composer; composeText keeps the UTF-8 byte limit", async ({ page }) => {
+test("S5: selected History image sends a draft to the chat composer; composeText keeps the UTF-8 byte limit", async ({ page }) => {
   const requests = await setup(page);
   await page.evaluate(() => {
     (window as any).drafts = [];
@@ -601,7 +602,8 @@ test("S5: History tile sends a draft to the chat composer; composeText keeps the
       if (e.data?.type === "protoagent:chat:compose") (window as any).drafts.push(e.data);
     });
   });
-  await page.locator(".g-tile").first().getByRole("button", { name: "Send to agent", exact: true }).click();
+  await pickTile(page, 0);
+  await bar(page).getByRole("button", { name: "Send to agent", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).drafts[0])).toEqual({
     type: "protoagent:chat:compose", text: 'Image root (generate, seed 42, prompt "A ceramic vase"): ',
@@ -651,3 +653,552 @@ test("S6: the gateway alias the composer resolves is pinned on submission", asyn
   expect(requests[0].tier).toBe("draft");
   expect(requests[0].alias).toBe("gateway-turbo");
 });
+
+// ===========================================================================
+// Images view R2: the action bar — edit verbs as actions on the current image
+// (design §3 / §4.3 / §5 / §8 / §10). Each verb submits its op with the current
+// image as both input and parent_id; contextual modes show a Chip and leave on
+// Esc; narrow collapses the overflow verbs into a More menu.
+// ===========================================================================
+
+// Select a History thumb so it becomes the current image (the action bar shows).
+const pickTile = (page: Page, index: number) =>
+  page.locator(".g-tile").nth(index).getByRole("button", { name: /render/ }).click();
+const bar = (page: Page) => page.getByRole("toolbar", { name: "Image actions", exact: true });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: action bar is a role=toolbar with named verbs and arrow-key roving focus`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    await expect(bar(page)).toBeVisible();
+    for (const name of ["Vary", "Edit", "Region", "Inpaint", "Outpaint", "Remove BG", "Compose", "Star", "Download", "Send to agent"]) {
+      await expect(bar(page).getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    const vary = bar(page).getByRole("button", { name: "Vary", exact: true });
+    await vary.focus();
+    await expect(vary).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(bar(page).getByRole("button", { name: "Edit", exact: true })).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(bar(page).getByRole("button", { name: "Region", exact: true })).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(bar(page).getByRole("button", { name: "Edit", exact: true })).toBeFocused();
+  });
+
+  test(`${theme}: Vary, Region and Remove BG submit their op with the current image as input and parent_id`, async ({ page }) => {
+    const ops = catalog.map(e => e.op === "remove_background"
+      ? { ...e, licence: { non_commercial: true, note: "RMBG-2.0 is CC BY-NC" } } : e);
+    const requests = await setup(page, theme, "pending", ops);
+    await pickTile(page, 0); // root: a generate, seed 42
+
+    // Vary: same params, a NEW seed, recorded as a child of the current image.
+    await bar(page).getByRole("button", { name: "Vary", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("generate");
+    expect(requests[0].parent_id).toBe("root");
+    expect(requests[0].params.prompt).toBe("A ceramic vase");
+    expect(typeof requests[0].params.seed).toBe("number");
+    expect(requests[0].params.seed).not.toBe(42);
+
+    // Region: the "What to change?" grounding field appears and rides the op.
+    await bar(page).getByRole("button", { name: "Region", exact: true }).click();
+    await page.getByLabel("What to change?", { exact: true }).fill("the vase");
+    await prompt(page).fill("make it cobalt blue");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1].op).toBe("region_edit");
+    expect(requests[1].params.grounding).toBe("the vase");
+    expect(requests[1].params.image).toBe("root");
+    expect(requests[1].parent_id).toBe("root");
+
+    // Remove BG: one click, no prompt, and the catalog non-commercial badge shows.
+    await expect(bar(page).locator(".action-bar-nc")).toContainText("Non-commercial");
+    await bar(page).getByRole("button", { name: "Remove BG", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(3);
+    expect(requests[2].op).toBe("remove_background");
+    expect(requests[2].params.image).toBe("root");
+    expect(requests[2].parent_id).toBe("root");
+    expect(requests[2].params).not.toHaveProperty("prompt");
+  });
+
+  test(`${theme}: Inpaint paints a source-size mask that the op submits`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 0); // root is 640x480
+    await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+    const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+    await expect(canvas).toBeVisible();
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await prompt(page).fill("a bunch of daisies");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("inpaint");
+    expect(requests[0].params.image).toBe("root");
+    expect(requests[0].parent_id).toBe("root");
+    const mask = requests[0].params.mask as string;
+    expect(mask).toMatch(/^data:image\/png/);
+    const dims = await page.evaluate(async (src) => {
+      const img = new Image(); img.src = src; await img.decode();
+      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+      const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+      return { width: c.width, height: c.height,
+        center: ctx.getImageData(320, 240, 1, 1).data[3], corner: ctx.getImageData(0, 0, 1, 1).data[3] };
+    }, mask);
+    // Painted region exports transparent (edit), unpainted exports opaque (preserve).
+    expect(dims).toMatchObject({ width: 640, height: 480, center: 0, corner: 255 });
+  });
+
+  for (const verb of ["Edit", "Region", "Outpaint"]) {
+    test(`${theme}: switching Inpaint through ${verb} requires a fresh visible mask`, async ({ page }) => {
+      const requests = await setup(page, theme);
+      await pickTile(page, 0);
+      const inpaint = bar(page).getByRole("button", { name: "Inpaint", exact: true });
+      const submit = page.getByRole("button", { name: "Apply edit", exact: true });
+      const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+      await inpaint.click();
+      await prompt(page).fill("a bunch of daisies");
+      await expect(canvas).toBeVisible();
+      // The stage fits-to-stage on entering a mode (pan 0, centred), so a source
+      // pixel maps to a known screen point; paint away from the floating toolbars.
+      const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+      const abs = Math.min(vb.width / 640, vb.height / 480);
+      const paintAt = async (sx: number, sy: number) => {
+        const x = vb.x + (vb.width - 640 * abs) / 2 + abs * sx;
+        const y = vb.y + (vb.height - 480 * abs) / 2 + abs * sy;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 8, y + 6, { steps: 3 });
+        await page.mouse.up();
+      };
+      await paintAt(480, 360);
+      await expect(submit).toBeEnabled();
+      // Re-selecting the active verb keeps the mounted painter and its mask.
+      await inpaint.click();
+      await expect(submit).toBeEnabled();
+      await bar(page).getByRole("button", { name: verb, exact: true }).click();
+      if (verb === "Outpaint") await page.getByLabel("Right", { exact: true }).fill("64");
+      await inpaint.click();
+      await expect(canvas).toBeVisible();
+      await expect(submit).toBeDisabled();
+      await prompt(page).press("Control+Enter");
+      expect(requests).toHaveLength(0);
+      await paintAt(300, 240);
+      await submit.click();
+      await expect.poll(() => requests.length).toBe(1);
+      expect(requests[0]).toMatchObject({ op: "inpaint", parent_id: "root", params: { image: "root" } });
+      const pixels = await page.evaluate(async (src) => {
+        const img = new Image(); img.src = src; await img.decode();
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+        return { old: ctx.getImageData(480, 360, 1, 1).data[3], fresh: ctx.getImageData(300, 240, 1, 1).data[3] };
+      }, requests[0].params.mask as string);
+      expect(pixels).toEqual({ old: 255, fresh: 0 });
+      if (verb === "Outpaint") {
+        await bar(page).getByRole("button", { name: "Outpaint", exact: true }).click();
+        await expect(page.getByLabel("Right", { exact: true })).toHaveValue("0");
+        await expect(submit).toBeDisabled();
+      }
+    });
+  }
+
+  test(`${theme}: Outpaint margins are editable numbers and match the handle drag`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 0);
+    await bar(page).getByRole("button", { name: "Outpaint", exact: true }).click();
+    const source = page.getByAltText("Outpaint source");
+    await expect(source).toBeVisible();
+    await expect.poll(() => source.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+    const handle = page.getByRole("button", { name: "Drag right margin", exact: true });
+    const hb = (await handle.boundingBox())!;
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(hb.x + hb.width / 2 + 48, hb.y + hb.height / 2, { steps: 4 });
+    await page.mouse.up();
+    const right = page.getByLabel("Right", { exact: true });
+    const dragged = Number(await right.inputValue());
+    expect(dragged).toBeGreaterThan(0);
+    // The numeric inputs are the WCAG 2.5.7 dragging alternative — type one too.
+    await page.getByLabel("Top", { exact: true }).fill("32");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("outpaint");
+    expect(requests[0].params.image).toBe("root");
+    expect(requests[0].parent_id).toBe("root");
+    expect(requests[0].params.right).toBe(dragged);
+    expect(requests[0].params.top).toBe(32);
+  });
+
+  test(`${theme}: Compose fills a reference slot from History and submits the image set`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 2); // leaf is the current image
+    await bar(page).getByRole("button", { name: "Compose", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Leave Compose mode", exact: true })).toBeVisible();
+    const picker = page.getByLabel("Pick reference 1 from history", { exact: true });
+    await expect(picker).toContainText("root");
+    await picker.selectOption("root");
+    await prompt(page).fill("blend them together");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("compose");
+    expect(requests[0].params.images).toContain("leaf"); // the current image
+    expect(requests[0].params.images).toContain("root");  // the picked reference
+    expect(requests[0].parent_id).toBe("leaf");
+  });
+
+  test(`${theme}: a contextual mode shows a Chip and leaves on × and on Esc`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 0);
+
+    // The × on the chip leaves the mode.
+    await bar(page).getByRole("button", { name: "Region", exact: true }).click();
+    const leaveRegion = page.getByRole("button", { name: "Leave Region mode", exact: true });
+    await expect(leaveRegion).toBeVisible();
+    await expect(page.getByLabel("What to change?", { exact: true })).toBeVisible();
+    await leaveRegion.click();
+    await expect(page.getByRole("button", { name: "Leave Region mode", exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("What to change?", { exact: true })).toHaveCount(0);
+
+    // Esc also leaves the mode.
+    await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Leave Inpaint mode", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Leave Inpaint mode", exact: true })).toHaveCount(0);
+    expect(requests).toHaveLength(0);
+  });
+}
+
+// ===========================================================================
+// Canvas zoom + pan (design §7 item 7): the floating view toolbar shows only with
+// an image; wheel zoom keeps the point under the cursor fixed; drag pans; Fit
+// restores the 417d0fa fitted box; the stage never scrolls; and Inpaint stays
+// source-accurate at zoom (the exported mask is source-size and aligned).
+// ===========================================================================
+
+const viewBar = (page: Page) => page.getByRole("toolbar", { name: "View controls", exact: true });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: the view toolbar is absent with no image and named once one is shown`, async ({ page }) => {
+    await setup(page, theme);
+    await expect(viewBar(page)).toHaveCount(0);
+    await pickTile(page, 0);
+    await expect(viewBar(page)).toBeVisible();
+    for (const name of ["Zoom out", "Zoom to 100%", "Zoom in", "Fit to stage", "Fullscreen"]) {
+      await expect(viewBar(page).getByRole("button", { name, exact: true })).toBeVisible();
+    }
+  });
+
+  test(`${theme}: wheel zoom scales the image and keeps the cursor point fixed, with no stage scrollbars`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    const img = page.getByAltText("Current image", { exact: true });
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(640);
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    const cx = vb.x + vb.width * 0.35, cy = vb.y + vb.height * 0.4;
+    // The on-screen fraction of the (rigidly transformed) image under the cursor
+    // is invariant, so a cursor-fixed zoom must keep that fraction at the cursor.
+    const before = await img.evaluate((el, p) => {
+      const r = el.getBoundingClientRect();
+      return { fx: (p.x - r.left) / r.width, fy: (p.y - r.top) / r.height, w: r.width };
+    }, { x: cx, y: cy });
+    await page.mouse.move(cx, cy);
+    await page.mouse.wheel(0, -400);
+    const after = await img.evaluate((el, b) => {
+      const r = el.getBoundingClientRect();
+      return { px: r.left + b.fx * r.width, py: r.top + b.fy * r.height, w: r.width };
+    }, before);
+    expect(after.w).toBeGreaterThan(before.w + 20);
+    expect(Math.abs(after.px - cx)).toBeLessThanOrEqual(2);
+    expect(Math.abs(after.py - cy)).toBeLessThanOrEqual(2);
+    const scroll = await page.locator(".stage").evaluate((el) => ({
+      sh: el.scrollHeight, ch: el.clientHeight, sw: el.scrollWidth, cw: el.clientWidth,
+    }));
+    expect(scroll.sh).toBe(scroll.ch);
+    expect(scroll.sw).toBe(scroll.cw);
+  });
+
+  test(`${theme}: drag pans the image and Fit restores the fitted box`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    const img = page.getByAltText("Current image", { exact: true });
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(640);
+    const box = () => img.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    const fitted = await box();
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    const c = { x: vb.x + vb.width / 2, y: vb.y + vb.height / 2 };
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.wheel(0, -400); // zoom in first so there is room to pan
+    const zoomedX = (await box()).x;
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.down();
+    await page.mouse.move(c.x + 80, c.y + 50, { steps: 4 });
+    await page.mouse.up();
+    expect((await box()).x - zoomedX).toBeGreaterThan(50);
+    await viewBar(page).getByRole("button", { name: "Fit to stage", exact: true }).click();
+    const refit = await box();
+    expect(Math.abs(refit.w - fitted.w)).toBeLessThan(1);
+    expect(Math.abs(refit.h - fitted.h)).toBeLessThan(1);
+    expect(Math.abs(refit.x - fitted.x)).toBeLessThan(1);
+    expect(Math.abs(refit.y - fitted.y)).toBeLessThan(1);
+  });
+
+  test(`${theme}: Inpaint stays source-accurate at ~2x zoom`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 0); // root is 640x480
+    await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+    const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+    await expect(canvas).toBeVisible();
+    // 100% (source 1:1) then +25% ×3 ≈ 1.95x, zoomed about centre so pan stays 0.
+    const pctBtn = viewBar(page).getByRole("button", { name: "Zoom to 100%", exact: true });
+    await pctBtn.click();
+    for (let i = 0; i < 3; i++) await viewBar(page).getByRole("button", { name: "Zoom in", exact: true }).click();
+    const pct = Number((await pctBtn.textContent())!.replace("%", ""));
+    expect(pct).toBeGreaterThan(150);
+    const abs = pct / 100;
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    // Centre maps to source (320,240) at any zoom with pan 0; paint off-centre.
+    const dx = 90, dy = 60;
+    const x = vb.x + vb.width / 2 + dx, y = vb.y + vb.height / 2 + dy;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 6, y + 4, { steps: 3 });
+    await page.mouse.up();
+    const sx = Math.round(320 + dx / abs), sy = Math.round(240 + dy / abs);
+    await prompt(page).fill("a patch of blue sky");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("inpaint");
+    expect(requests[0].params.image).toBe("root");
+    const pixels = await page.evaluate(async (args) => {
+      const img = new Image(); img.src = args.src; await img.decode();
+      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+      const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+      return {
+        w: c.width, h: c.height,
+        painted: ctx.getImageData(args.sx, args.sy, 1, 1).data[3],
+        center: ctx.getImageData(320, 240, 1, 1).data[3],
+        corner: ctx.getImageData(2, 2, 1, 1).data[3],
+      };
+    }, { src: requests[0].params.mask as string, sx, sy });
+    // Painted off-centre → transparent (edit); the untouched centre + corner stay
+    // opaque (preserve); the exported mask is the full source size.
+    expect(pixels.w).toBe(640);
+    expect(pixels.h).toBe(480);
+    expect(pixels.painted).toBe(0);
+    expect(pixels.center).toBe(255);
+    expect(pixels.corner).toBe(255);
+  });
+
+  test(`${theme}: Fullscreen opens a lightbox that Esc closes`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    await viewBar(page).getByRole("button", { name: "Fullscreen", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Fullscreen image", exact: true });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+}
+
+test("below 780px the action bar moves Outpaint, Remove BG and Compose into More", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  const requests = await setup(page);
+  await prompt(page).fill("A ceramic vase");
+  const tracking = page.waitForRequest(r => r.url().endsWith("/jobs/job-1") && r.method() === "GET");
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  await tracking;
+  await busDone(page, { job_id: "job-1", media_id: "leaf", elapsed_s: 2 });
+  await expect(page.getByAltText("Current image")).toBeVisible();
+
+  const t = bar(page);
+  await expect(t).toBeVisible();
+  // The four primaries stay at top level; the rest collapse into More.
+  await expect(t.getByRole("button", { name: "Region", exact: true })).toBeVisible();
+  await expect(t.getByRole("button", { name: "Inpaint", exact: true })).toBeVisible();
+  await expect(t.getByRole("button", { name: "Outpaint", exact: true })).toHaveCount(0);
+  await expect(t.getByRole("button", { name: "Remove BG", exact: true })).toHaveCount(0);
+  await expect(t.getByRole("button", { name: "Compose", exact: true })).toHaveCount(0);
+  await t.getByRole("button", { name: "More actions", exact: true }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Outpaint", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Remove BG", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Compose", exact: true })).toBeVisible();
+});
+
+test("Send to agent confirms with a toast", async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as any).drafts = [];
+    window.addEventListener("message", (e) => {
+      if ((e as MessageEvent).data?.type === "protoagent:chat:compose") (window as any).drafts.push((e as MessageEvent).data);
+    });
+  });
+  await pickTile(page, 0);
+  await bar(page).getByRole("button", { name: "Send to agent", exact: true }).click();
+  await expect(page.getByText("Added to chat composer", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
+});
+
+test("§6: the per-slot free-text media reference field is gone", async ({ page }) => {
+  await setup(page);
+  await pickTile(page, 2);
+  // No free-text media-reference inputs survive anywhere.
+  await expect(page.getByPlaceholder("enter a media reference", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: /reference$/ })).toHaveCount(0);
+  // Compose uses a compact dropzone (upload / From History…), not a text field.
+  await bar(page).getByRole("button", { name: "Compose", exact: true }).click();
+  await expect(page.getByLabel("Pick reference 1 from history", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /reference/i })).toHaveCount(0);
+});
+
+// R2 review fix: the ds-pending stand-ins must NOT reuse the kit's `pl-*` class
+// namespace. /_ds/plugin-kit.css defines `.pl-popover`/`.pl-empty`/`.pl-menu`/…
+// with ITS OWN meaning, so a stand-in on a `pl-*` class gets restyled by the kit
+// when both load in the console (the oversized popover wrappers and monospace
+// empty state the review caught). This is the guard: the stand-in source and its
+// CSS may only use the plugin-local `pbx-*` namespace. `--pl-*` design TOKENS
+// (var(--pl-color-*) etc.) stay allowed — they are consumed, not redefined.
+test("ds-pending stand-ins use the pbx-* namespace, never the kit's pl-*", () => {
+  // Checked-in snapshot of the plugin-kit `.pl-*` selectors the stand-ins used to
+  // collide with (from /_ds/plugin-kit.css). Any reappearance is a regression.
+  const KIT_PL_SELECTORS = [
+    "pl-popover", "pl-popover-panel", "pl-menu", "pl-menu-list", "pl-menu-item",
+    "pl-empty", "pl-chip", "pl-callout", "pl-banner", "pl-badge", "pl-btn",
+    "pl-drawer", "pl-drawer-overlay", "pl-tooltip", "pl-tabs", "pl-tab",
+    "pl-segmented", "pl-input", "pl-textarea", "pl-select", "pl-switch",
+    "pl-field", "pl-progress", "pl-spinner", "pl-toast", "pl-toasts",
+    "pl-skeleton", "pl-skeleton-group", "pl-panel-header",
+  ];
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  // Strip comments first: our own comments explain the collision and name the kit
+  // selectors, which would otherwise trip the scan. (No `//` or `/*` lives inside
+  // a string literal in these two hand-written files.)
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // `pl-foo` used as a CLASS — i.e. `pl-` not preceded by `-`, so `--pl-color-*`
+  // tokens and `var(--pl-*` references are skipped.
+  const classTokens = (src: string) => stripComments(src).match(/(?<!-)\bpl-[a-zA-Z0-9-]+/g) ?? [];
+
+  const sources = { "ds-pending/index.tsx": read("../src/ds-pending/index.tsx"), "styles.css": read("../src/styles.css") };
+  for (const [name, src] of Object.entries(sources)) {
+    expect([...new Set(classTokens(src))], `${name} must not use the pl-* class namespace`).toEqual([]);
+  }
+  // Belt-and-braces against the checked-in kit list specifically.
+  const all = Object.values(sources).map(stripComments).join("\n");
+  for (const sel of KIT_PL_SELECTORS) {
+    expect(all, `a stand-in class collides with kit .${sel}`).not.toMatch(new RegExp(`(^|[^-\\w])${sel}\\b`));
+  }
+});
+
+// R2 review fix #2: below 780px the composer options trigger must shrink to a
+// sliders ICON with a name, not a bare "▾" with an empty label.
+test("below 780px the composer options trigger collapses to a named sliders icon", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await setup(page);
+  const options = page.getByRole("button", { name: /Options/ });
+  await expect(options).toBeVisible();
+  await expect(options.locator(".composer-options-icon svg")).toBeVisible();
+  // The summary text and caret are hidden so the icon stands alone.
+  await expect(options.locator(".composer-options-summary")).toBeHidden();
+  await expect(options.locator(".composer-options-caret")).toBeHidden();
+});
+
+// R2 review fix #3: the Inpaint brush/feather controls use the token Slider
+// (accent-colour from the DS token), not an unstyled native browser-blue range.
+test("the Inpaint mask tools use the token Slider, not a native browser range", async ({ page }) => {
+  await setup(page);
+  await pickTile(page, 0);
+  await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+  const brush = page.getByLabel("Brush size", { exact: true });
+  const feather = page.getByLabel("Feather", { exact: true });
+  await expect(brush).toBeVisible();
+  await expect(brush).toHaveClass(/pbx-slider/);
+  await expect(feather).toHaveClass(/pbx-slider/);
+  // accent-color resolves to the DS accent token, never the UA default ("auto").
+  const accent = await brush.evaluate((el) => getComputedStyle(el).accentColor);
+  expect(accent).not.toBe("auto");
+});
+
+// R2 review fix #4: "Send to agent" must not reuse Edit's pencil glyph.
+test("Send to agent uses a distinct icon from Edit", async ({ page }) => {
+  await setup(page);
+  await pickTile(page, 0);
+  const pathsOf = (name: string) =>
+    bar(page).getByRole("button", { name, exact: true }).locator("svg path")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("d")).join("|"));
+  const editPaths = await pathsOf("Edit");
+  const sendPaths = await pathsOf("Send to agent");
+  expect(sendPaths).not.toBe("");
+  expect(sendPaths).not.toBe(editPaths);
+});
+
+for (const theme of ["light", "dark"]) {
+  for (const banner of [false, true]) {
+    test(`${theme}: large results fit a short stage (catalog banner: ${banner})`, async ({ page }) => {
+      await page.setViewportSize({ width: 1100, height: 700 });
+      await setup(page, theme);
+      await page.route("**/fixture/catalog", route => route.fulfill({
+        json: { ops: catalog, source: banner ? "static" : "gateway" },
+      }));
+      await page.reload();
+      await expect(page.locator(".banner-stale")).toHaveCount(banner ? 1 : 0);
+      for (const [index, width, height] of [[0, 1024, 1024], [1, 1344, 768], [2, 3200, 2000]]) {
+        await page.route(`**/fixture/history/${records[index].media_id}/image`, route => route.fulfill({
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
+          contentType: "image/svg+xml",
+        }));
+        await pickTile(page, index);
+        const img = page.getByAltText("Current image", { exact: true });
+        await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(width);
+        const geometry = await img.evaluate(el => {
+          const stage = el.closest(".stage")!;
+          const imageBox = el.getBoundingClientRect();
+          const stageBox = stage.getBoundingClientRect();
+          return {
+            inside: imageBox.left >= stageBox.left && imageBox.top >= stageBox.top
+              && imageBox.right <= stageBox.right && imageBox.bottom <= stageBox.bottom,
+            centered: Math.abs(imageBox.x + imageBox.width / 2 - stageBox.x - stageBox.width / 2) < 1
+              && Math.abs(imageBox.y + imageBox.height / 2 - stageBox.y - stageBox.height / 2) < 1,
+            height: stageBox.height,
+            scrollHeight: stage.scrollHeight, clientHeight: stage.clientHeight,
+            scrollWidth: stage.scrollWidth, clientWidth: stage.clientWidth,
+            fit: getComputedStyle(el).objectFit,
+          };
+        });
+        expect(geometry.height).toBeLessThan(500);
+        expect(geometry.inside).toBe(true);
+        expect(geometry.centered).toBe(true);
+        expect(geometry.scrollHeight).toBe(geometry.clientHeight);
+        expect(geometry.scrollWidth).toBe(geometry.clientWidth);
+        expect(geometry.fit).toBe("contain");
+      }
+    });
+  }
+
+  test(`${theme}: History is a three-column grid of named selectable thumbnails`, async ({ page }) => {
+    const recent = records.map(rec => ({ ...rec, source: "agent" as const, created: Date.now() / 1000 - 120 }));
+    await setup(page, theme, "pending", catalog, recent);
+    const tiles = page.locator(".g-tile");
+    await expect(tiles).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(tiles.nth(i).getByRole("button")).toHaveCount(1);
+      await expect(tiles.nth(i).getByRole("button")).toHaveAccessibleName(/render, 2 min ago/);
+      await expect(tiles.nth(i).locator(".g-agent")).toHaveText("agent");
+    }
+    const positions = await tiles.evaluateAll(els => els.map(el => {
+      const box = el.getBoundingClientRect();
+      return { x: box.x, y: box.y };
+    }));
+    expect(positions.every(pos => pos.y === positions[0].y)).toBe(true);
+    expect(new Set(positions.map(pos => pos.x)).size).toBe(3);
+    await tiles.first().getByRole("button").focus();
+    await expect(tiles.first().getByRole("tooltip")).toHaveText(/render, 2 min ago/);
+    await page.keyboard.press("Enter");
+    await expect(tiles.first().getByRole("button")).toHaveAttribute("aria-current", "true");
+    await expect(bar(page).getByRole("button", { name: "Star", exact: true })).toBeVisible();
+    await expect(bar(page).getByRole("button", { name: "Send to agent", exact: true })).toBeVisible();
+  });
+}

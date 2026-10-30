@@ -1,4 +1,3 @@
-import { sendToAgent } from "./api";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -6,11 +5,9 @@ import {
   type HistoryRecord,
   fetchHistory,
   fetchHistoryImage,
-  starMedia,
   subscribe,
-  unstarMedia,
 } from "./api";
-import { Badge, Button, DropdownSelect, PanelHeader, Popover, Segmented, SkeletonGroup, Switch } from "./ds-pending";
+import { Badge, Button, DropdownSelect, PanelHeader, Popover, Segmented, SkeletonGroup, Switch, Tooltip } from "./ds-pending";
 
 // History (design §3/§4): one shared index over BOTH agent renders
 // (source=agent) and Studio renders (source=studio), as a 248px right column
@@ -83,58 +80,45 @@ function Tile({
   label,
   selected,
   onSelect,
-  onStar,
 }: {
   rec: HistoryRecord;
   url: string | undefined;
   label: string;
   selected: boolean;
   onSelect: () => void;
-  onStar: () => void;
 }) {
+  const minutes = rec.created == null ? null : Math.max(0, Math.floor((Date.now() / 1000 - rec.created) / 60));
+  const age = minutes == null ? "time unknown" : minutes < 1 ? "just now" : minutes < 60
+    ? `${minutes} min ago` : minutes < 1440 ? `${Math.floor(minutes / 60)} hr ago` : `${Math.floor(minutes / 1440)} days ago`;
+  const name = `${rec.pruned ? "Pruned " : ""}${label} render, ${age}`;
   return (
     <figure className={`g-tile${rec.pruned ? " pruned" : ""}${selected ? " selected" : ""}`}>
-      <button
-        type="button"
-        className="g-thumb"
-        onClick={onSelect}
-        aria-current={selected || undefined}
-        aria-label={`${rec.pruned ? "Pruned " : ""}${label} render`}
-      >
-        {rec.pruned ? (
-          <span className="pruned-tile">
-            pruned
-            <small>retention removed this; star to keep future renders</small>
-          </span>
-        ) : url ? (
-          <img src={url} alt={`${label} render`} loading="lazy" />
-        ) : (
-          <span className="g-loading" aria-hidden="true" />
-        )}
-        {rec.source === "agent" && (
-          <Badge tone="info" className="g-agent">
-            agent
-          </Badge>
-        )}
-      </button>
-
-      <div className="g-actions">
-        <Button variant="ghost" size="xs" className="g-send" onClick={() => sendToAgent(rec)}>
-          Send to agent
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon
-          aria-pressed={rec.starred}
-          title={rec.starred ? "Starred (kept through retention)" : "Star — keep through retention"}
-          aria-label={rec.starred ? "Unstar" : "Star"}
-          onClick={onStar}
-          disabled={rec.pruned}
+      <Tooltip label={name}>
+        <button
+          type="button"
+          className="g-thumb"
+          onClick={onSelect}
+          aria-current={selected || undefined}
+          aria-label={name}
         >
-          {rec.starred ? "★" : "☆"}
-        </Button>
-      </div>
+          {rec.pruned ? (
+            <span className="pruned-tile">
+              pruned
+              <small>retention removed this; star to keep future renders</small>
+            </span>
+          ) : url ? (
+            <img src={url} alt={`${label} render`} loading="lazy" />
+          ) : (
+            <span className="g-loading" aria-hidden="true" />
+          )}
+          {rec.source === "agent" && (
+            <Badge tone="info" className="g-agent">
+              agent
+            </Badge>
+          )}
+        </button>
+
+      </Tooltip>
     </figure>
   );
 }
@@ -147,12 +131,14 @@ export function Gallery({
   compact,
   selectedId,
   onSelect,
+  onRecords,
 }: {
   catalog: CatalogEntry[] | null;
   revision?: number;
   compact?: boolean;
   selectedId?: string;
   onSelect: (rec: HistoryRecord) => void;
+  onRecords?: (records: HistoryRecord[]) => void;
 }) {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -205,6 +191,12 @@ export function Gallery({
     reload();
   }, [reload, revision]);
 
+  // Surface the loaded records so the shell can offer them to the Compose
+  // reference slots ("pick from History", §4.3) without a second fetch.
+  useEffect(() => {
+    onRecords?.(records);
+  }, [records, onRecords]);
+
   // Bus-driven refresh (ADR 0039): a fresh render — agent or studio — joins
   // History within one bus tick.
   useEffect(() => {
@@ -213,15 +205,6 @@ export function Gallery({
     });
     return off;
   }, [reload]);
-
-  const toggleStar = useCallback(async (rec: HistoryRecord) => {
-    try {
-      const starred = rec.starred ? await unstarMedia(rec.media_id) : await starMedia(rec.media_id);
-      setRecords((prev) => prev.map((r) => (r.media_id === rec.media_id ? { ...r, starred } : r)));
-    } catch {
-      /* ignore — the star button simply stays as it was */
-    }
-  }, []);
 
   const filterActive = filters.op !== "" || filters.source !== "" || filters.starredOnly;
 
@@ -249,8 +232,8 @@ export function Gallery({
             )}
           >
             <div className="g-filter-grid">
-              <div className="pl-field">
-                <span className="pl-field-label">Operation</span>
+              <div className="pbx-field">
+                <span className="pbx-field-label">Operation</span>
                 <DropdownSelect
                   ariaLabel="Filter by operation"
                   value={filters.op}
@@ -258,8 +241,8 @@ export function Gallery({
                   options={[{ value: "", label: "All" }, ...(catalog || []).map((e) => ({ value: e.op, label: e.label }))]}
                 />
               </div>
-              <div className="pl-field">
-                <span className="pl-field-label">Source</span>
+              <div className="pbx-field">
+                <span className="pbx-field-label">Source</span>
                 <Segmented
                   ariaLabel="Filter by source"
                   size="sm"
@@ -302,7 +285,6 @@ export function Gallery({
                 label={opLabel(catalog, rec.op)}
                 selected={selectedId === rec.media_id}
                 onSelect={() => onSelect(rec)}
-                onStar={() => toggleStar(rec)}
               />
             ))}
           </div>

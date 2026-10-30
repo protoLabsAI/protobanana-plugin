@@ -148,7 +148,7 @@ body {
 
 /* ---- header (PanelHeader) ----------------------------------------------- */
 
-.pl-panel-header {
+.pbx-panel-header {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -157,17 +157,17 @@ body {
   background: var(--bg-raised);
 }
 
-.pl-panel-header--compact {
+.pbx-panel-header--compact {
   padding: 10px 12px;
   gap: 8px;
 }
 
-.pl-panel-header-titles {
+.pbx-panel-header-titles {
   display: grid;
   gap: 1px;
 }
 
-.pl-panel-header-kicker {
+.pbx-panel-header-kicker {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -175,25 +175,25 @@ body {
   color: var(--muted);
 }
 
-.pl-panel-header-title {
+.pbx-panel-header-title {
   margin: 0;
   font-size: 17px;
   font-weight: 650;
   line-height: 1.1;
 }
 
-.pl-panel-header--compact .pl-panel-header-title {
+.pbx-panel-header--compact .pbx-panel-header-title {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
 }
 
-.pl-panel-header-mid {
+.pbx-panel-header-mid {
   flex: 0 0 auto;
 }
 
-.pl-panel-header-actions {
+.pbx-panel-header-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -224,6 +224,7 @@ body {
   flex: 1;
   min-height: 260px;
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -233,8 +234,8 @@ body {
 }
 
 .stage-img {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   border-radius: calc(var(--radius) - 2px);
   transition: opacity 0.2s ease;
@@ -342,6 +343,13 @@ body {
   max-width: 14ch;
 }
 
+/* The sliders icon is the narrow (<780px) stand-in for the summary + caret; it
+ * stays hidden until the container query below swaps them. */
+.composer-options-icon {
+  display: none;
+  align-items: center;
+}
+
 .composer-opt-grid {
   display: grid;
   gap: 12px;
@@ -353,7 +361,7 @@ body {
   gap: 6px;
 }
 
-.composer-seed .pl-input {
+.composer-seed .pbx-input {
   flex: 1;
 }
 
@@ -406,6 +414,7 @@ body {
 
 .g-thumb {
   position: relative;
+  width: 100%;
   aspect-ratio: 1 / 1;
   padding: 0;
   border: 1px solid var(--border);
@@ -485,14 +494,9 @@ body {
   );
 }
 
-.g-actions {
+.g-tile > .pbx-tooltip-wrap {
   display: flex;
-  gap: 4px;
-}
-
-.g-actions .g-send {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
 }
 
 .g-more {
@@ -564,31 +568,34 @@ body {
 
 /* =========================================================================
  * @protolabsai/ui stand-ins (src/ds-pending). Token-only; swap-target for the
- * real package via a waits_for: npm:@protolabsai/ui card.
+ * real package via a waits_for: npm:@protolabsai/ui card. These use a
+ * PLUGIN-LOCAL `.pbx-*` namespace — never `.pl-*`, which belongs to
+ * /_ds/plugin-kit.css and would clobber them in the console (guarded by the
+ * ds-pending-no-pl-collision test).
  * ========================================================================= */
 
-.pl-spinner {
+.pbx-spinner {
   display: inline-block;
   flex: none;
   border-radius: 50%;
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
-  animation: pl-spin 0.8s linear infinite;
+  animation: pbx-spin 0.8s linear infinite;
 }
 
-@keyframes pl-spin {
+@keyframes pbx-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pl-spinner {
+  .pbx-spinner {
     animation-duration: 2.4s;
   }
 }
 
-.pl-btn {
+.pbx-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -605,61 +612,61 @@ body {
   white-space: nowrap;
 }
 
-.pl-btn:hover:not(:disabled) {
+.pbx-btn:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.pl-btn:disabled {
+.pbx-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 
-.pl-btn--primary {
+.pbx-btn--primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-fg);
 }
 
-.pl-btn--primary:hover:not(:disabled) {
+.pbx-btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
 
-.pl-btn--ghost {
+.pbx-btn--ghost {
   background: transparent;
   border-color: transparent;
 }
 
-.pl-btn--ghost:hover:not(:disabled) {
+.pbx-btn--ghost:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.pl-btn--ghost.is-active {
+.pbx-btn--ghost.is-active {
   color: var(--accent);
 }
 
-.pl-btn--danger {
+.pbx-btn--danger {
   background: transparent;
   border-color: var(--danger);
   color: var(--danger);
 }
 
-.pl-btn--xs {
+.pbx-btn--xs {
   padding: 3px 7px;
   font-size: 11px;
 }
 
-.pl-btn--sm {
+.pbx-btn--sm {
   padding: 5px 10px;
   font-size: 12px;
 }
 
-.pl-btn--icon {
+.pbx-btn--icon {
   padding: 6px;
   min-width: 32px;
 }
 
-.pl-badge {
+.pbx-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -673,22 +680,22 @@ body {
   white-space: nowrap;
 }
 
-.pl-badge--info {
+.pbx-badge--info {
   border-color: var(--info);
   color: var(--info);
 }
 
-.pl-badge--warning {
+.pbx-badge--warning {
   border-color: var(--warning);
 }
 
-.pl-badge--error {
+.pbx-badge--error {
   border-color: var(--danger);
   color: var(--danger);
 }
 
 /* Tabs (segmented) */
-.pl-tabs--segmented {
+.pbx-tabs--segmented {
   display: inline-flex;
   padding: 2px;
   gap: 2px;
@@ -697,7 +704,7 @@ body {
   background: var(--bg-subtle);
 }
 
-.pl-tab {
+.pbx-tab {
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -709,19 +716,19 @@ body {
   cursor: pointer;
 }
 
-.pl-tab--active {
+.pbx-tab--active {
   background: var(--bg-raised);
   color: var(--fg);
   box-shadow: 0 1px 2px var(--overlay);
 }
 
-.pl-tab:disabled {
+.pbx-tab:disabled {
   color: var(--subtle);
   cursor: not-allowed;
 }
 
 /* Segmented (radiogroup) */
-.pl-segmented {
+.pbx-segmented {
   display: inline-flex;
   flex-wrap: wrap;
   padding: 2px;
@@ -731,7 +738,7 @@ body {
   background: var(--bg-subtle);
 }
 
-.pl-segmented-opt {
+.pbx-segmented-opt {
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -742,17 +749,17 @@ body {
   cursor: pointer;
 }
 
-.pl-segmented-opt.is-active {
+.pbx-segmented-opt.is-active {
   background: var(--accent);
   color: var(--accent-fg);
 }
 
-.pl-segmented--sm .pl-segmented-opt {
+.pbx-segmented--sm .pbx-segmented-opt {
   padding: 3px 8px;
 }
 
 /* Empty */
-.pl-empty {
+.pbx-empty {
   display: grid;
   justify-items: center;
   gap: 8px;
@@ -760,29 +767,29 @@ body {
   color: var(--muted);
 }
 
-.pl-empty-icon {
+.pbx-empty-icon {
   color: var(--subtle);
 }
 
-.pl-empty-title {
+.pbx-empty-title {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: var(--fg);
 }
 
-.pl-empty-desc {
+.pbx-empty-desc {
   margin: 0;
   font-size: 12px;
   max-width: 34ch;
 }
 
-.pl-empty-action {
+.pbx-empty-action {
   margin-top: 4px;
 }
 
 /* Callout */
-.pl-callout {
+.pbx-callout {
   display: grid;
   gap: 8px;
   padding: 12px 14px;
@@ -794,35 +801,35 @@ body {
   font-size: 13px;
 }
 
-.pl-callout--warning {
+.pbx-callout--warning {
   border-left-color: var(--warning);
 }
 
-.pl-callout--error {
+.pbx-callout--error {
   border-left-color: var(--danger);
 }
 
-.pl-callout--info {
+.pbx-callout--info {
   border-left-color: var(--info);
 }
 
-.pl-callout-title {
+.pbx-callout-title {
   display: block;
   font-size: 13px;
 }
 
-.pl-callout-text {
+.pbx-callout-text {
   color: var(--muted);
 }
 
-.pl-callout-actions {
+.pbx-callout-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 /* Banner */
-.pl-banner {
+.pbx-banner {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -833,21 +840,21 @@ body {
   font-size: 13px;
 }
 
-.pl-banner--error {
+.pbx-banner--error {
   border-color: var(--danger);
 }
 
-.pl-banner-body {
+.pbx-banner-body {
   flex: 1;
 }
 
-.pl-banner-actions {
+.pbx-banner-actions {
   flex: none;
 }
 
 /* Textarea / Input / FormField */
-.pl-textarea,
-.pl-input {
+.pbx-textarea,
+.pbx-input {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -859,27 +866,27 @@ body {
   font: inherit;
 }
 
-.pl-textarea {
+.pbx-textarea {
   resize: vertical;
 }
 
-.pl-field {
+.pbx-field {
   display: grid;
   gap: 5px;
 }
 
-.pl-field-label {
+.pbx-field-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
 }
 
-.pl-field-hint {
+.pbx-field-hint {
   font-size: 11px;
   color: var(--subtle);
 }
 
-.pl-select {
+.pbx-select {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--border);
@@ -891,7 +898,7 @@ body {
 }
 
 /* Switch */
-.pl-switch {
+.pbx-switch {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -904,7 +911,7 @@ body {
   padding: 0;
 }
 
-.pl-switch-track {
+.pbx-switch-track {
   width: 34px;
   height: 18px;
   border-radius: 999px;
@@ -916,7 +923,7 @@ body {
   transition: background 0.15s ease;
 }
 
-.pl-switch-thumb {
+.pbx-switch-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -924,32 +931,48 @@ body {
   transition: transform 0.15s ease;
 }
 
-.pl-switch.is-on .pl-switch-track {
+.pbx-switch.is-on .pbx-switch-track {
   background: var(--accent);
   border-color: var(--accent);
 }
 
-.pl-switch.is-on .pl-switch-thumb {
+.pbx-switch.is-on .pbx-switch-thumb {
   transform: translateX(16px);
   background: var(--accent-fg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pl-switch-track,
-  .pl-switch-thumb {
+  .pbx-switch-track,
+  .pbx-switch-thumb {
     transition: none;
   }
 }
 
+/* Slider (DS gap #643): token-only range — the thumb/track read as the DS accent
+ * via accent-color, never the browser-blue default. */
+.pbx-slider {
+  width: 100%;
+  height: 18px;
+  margin: 2px 0;
+  cursor: pointer;
+  accent-color: var(--pl-color-accent, var(--accent));
+  background: transparent;
+}
+
+.pbx-slider:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* Progress */
-.pl-progress {
+.pbx-progress {
   height: 6px;
   border-radius: 999px;
   background: var(--bg-hover);
   overflow: hidden;
 }
 
-.pl-progress-bar {
+.pbx-progress-bar {
   display: block;
   height: 100%;
   background: var(--accent);
@@ -957,12 +980,12 @@ body {
   transition: width 0.3s ease;
 }
 
-.pl-progress--indet .pl-progress-bar {
+.pbx-progress--indet .pbx-progress-bar {
   width: 40%;
-  animation: pl-indet 1.1s ease-in-out infinite;
+  animation: pbx-indet 1.1s ease-in-out infinite;
 }
 
-@keyframes pl-indet {
+@keyframes pbx-indet {
   0% {
     transform: translateX(-120%);
   }
@@ -972,17 +995,17 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pl-progress-bar {
+  .pbx-progress-bar {
     transition: none;
   }
-  .pl-progress--indet .pl-progress-bar {
+  .pbx-progress--indet .pbx-progress-bar {
     animation: none;
     width: 100%;
   }
 }
 
 /* Skeletons */
-.pl-skeleton {
+.pbx-skeleton {
   display: block;
   border-radius: calc(var(--radius) - 3px);
   background: linear-gradient(90deg, var(--bg-subtle), var(--bg-hover), var(--bg-subtle));
@@ -991,23 +1014,23 @@ body {
   min-height: 48px;
 }
 
-.pl-skeleton-group .pl-skeleton {
+.pbx-skeleton-group .pbx-skeleton {
   aspect-ratio: 1 / 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pl-skeleton {
+  .pbx-skeleton {
     animation: none;
   }
 }
 
 /* Popover */
-.pl-popover {
+.pbx-popover {
   position: relative;
   display: inline-flex;
 }
 
-.pl-popover-panel {
+.pbx-popover-panel {
   position: absolute;
   z-index: 40;
   padding: 12px;
@@ -1017,24 +1040,24 @@ body {
   box-shadow: 0 10px 32px var(--overlay);
 }
 
-.pl-popover-panel--bottom {
+.pbx-popover-panel--bottom {
   top: calc(100% + 6px);
 }
 
-.pl-popover-panel--top {
+.pbx-popover-panel--top {
   bottom: calc(100% + 6px);
 }
 
-.pl-popover-panel--start {
+.pbx-popover-panel--start {
   left: 0;
 }
 
-.pl-popover-panel--end {
+.pbx-popover-panel--end {
   right: 0;
 }
 
 /* Drawer */
-.pl-drawer-overlay {
+.pbx-drawer-overlay {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -1043,7 +1066,7 @@ body {
   justify-content: flex-end;
 }
 
-.pl-drawer {
+.pbx-drawer {
   width: min(320px, 86vw);
   height: 100%;
   background: var(--bg-raised);
@@ -1052,12 +1075,46 @@ body {
   overflow: auto;
 }
 
+/* Lightbox (fullscreen image from the view toolbar, §7) */
+.pbx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--overlay);
+}
+
+.pbx-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: 0 16px 48px var(--overlay);
+}
+
+.pbx-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
 /* ---- container-query responsiveness (the view's own width, §8) ---------- */
 
 @container (max-width: 779px) {
-  .composer-options-summary {
-    max-width: 0;
-    margin: 0;
+  /* The options trigger collapses to the sliders icon (design §8); hide the
+   * summary text and caret and let the icon stand in with the same name. */
+  .composer-options-summary,
+  .composer-options-caret {
+    display: none;
+  }
+  .composer-options-icon {
+    display: inline-flex;
+  }
+  .composer-options-btn {
+    padding: 6px;
+    min-width: 32px;
   }
 }
 
@@ -1076,9 +1133,432 @@ body {
   }
 }
 
-/* Keep dead-but-retained R2/R3 components (OpForm/Compare/Lineage/MaskEditor)
- * styleable: generic control baselines, lower specificity than every .pl-* rule
- * above, so they never override the stand-ins. */
+/* =========================================================================
+ * Action bar (design §3/§4/§5) — verb toolbar between the canvas and composer.
+ * ========================================================================= */
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.action-bar-verbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.action-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action-bar-send {
+  gap: 6px;
+}
+
+.action-bar-nc {
+  margin-left: 6px;
+  white-space: normal;
+}
+
+/* -------------------------------------------------------------------- Tooltip */
+
+.pbx-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.pbx-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  z-index: 50;
+  padding: 4px 8px;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 16px var(--overlay);
+}
+
+.pbx-tooltip-wrap:hover .pbx-tooltip,
+.pbx-tooltip-wrap:focus-within .pbx-tooltip {
+  display: block;
+}
+
+/* ----------------------------------------------------------------------- Chip */
+
+.pbx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.pbx-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pbx-chip-x:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+/* ----------------------------------------------------------------------- Menu */
+
+.pbx-menu-list {
+  display: grid;
+  gap: 2px;
+  min-width: 160px;
+}
+
+.pbx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pbx-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.pbx-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pbx-menu-item-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------- Toasts */
+
+.pbx-toasts {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  pointer-events: none;
+}
+
+.pbx-toast {
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 13px;
+  box-shadow: 0 8px 28px var(--overlay);
+}
+
+/* ---- composer: modes, grounding, margins, compose refs ------------------ */
+
+.composer-mode {
+  justify-self: start;
+}
+
+.composer-grounding {
+  gap: 4px;
+}
+
+.composer-margins {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.composer-margin {
+  gap: 3px;
+}
+
+.composer-refs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ref-slot {
+  flex: 1 1 140px;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.ref-slot.is-filled {
+  border-style: solid;
+  border-color: var(--accent);
+}
+
+.ref-slot-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ref-slot-pickers {
+  display: grid;
+  gap: 6px;
+}
+
+.ref-slot-upload {
+  display: inline-flex;
+  justify-content: center;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.ref-slot-upload:hover {
+  background: var(--bg-hover);
+}
+
+.ref-slot-filled {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ref-slot-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---- canvas zoom + pan (design §7, hand-built until #642 ImageViewport) --- */
+
+/* The zoom viewport fills the stage content box (inside the 1px border), clips
+ * at every zoom so the stage never grows scrollbars, and is focusable for the
+ * +/-/0/1/arrow keyboard controls. */
+.stage-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  outline: none;
+  touch-action: none;
+}
+
+.stage-viewport.is-pannable {
+  cursor: grab;
+}
+
+.stage-viewport.is-pannable:active {
+  cursor: grabbing;
+}
+
+/* Floating view toolbar, top-right of the stage; raised, token-only. */
+.view-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: 0 4px 16px var(--overlay);
+}
+
+.view-zoom-pct {
+  min-width: 46px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.view-zoom-pct:hover {
+  background: var(--bg-hover);
+}
+
+/* ---- mask + margin modes on the canvas ---------------------------------- */
+
+/* The Konva mask stage fills the viewport; its Layer carries the fit+zoom
+ * transform so a stroke maps to source pixels (MaskEditor). */
+.mask-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Compact floating paint-tools panel, top-left so it clears the view toolbar
+ * (top-right) and the render overlay (bottom-centre). */
+.mask-tools {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  max-width: 236px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: 0 4px 16px var(--overlay);
+}
+
+.mask-tools legend {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.mask-tools .hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mask-tools .slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mask-tools .slot-actions button {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mask-tools .slot-actions button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mask-tools label {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mask-tools kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  font-size: 10px;
+}
+
+/* The outpaint preview keeps its own size (handles stay inside the stage) and is
+ * centred in the viewport; the zoom stage scales the whole group about its centre
+ * so the margin preview scales with zoom (§7). */
+.stage-outpaint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.margin-canvas {
+  position: relative;
+  display: inline-flex;
+}
+
+.margin-canvas img {
+  display: block;
+  max-width: min(100%, 460px);
+  max-height: 52vh;
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.margin-handle {
+  position: absolute;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: grab;
+}
+
+.margin-handle.left { left: 0; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+.margin-handle.right { right: 0; top: 50%; transform: translate(50%, -50%); cursor: ew-resize; }
+.margin-handle.top { top: 0; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize; }
+.margin-handle.bottom { bottom: 0; left: 50%; transform: translate(-50%, 50%); cursor: ns-resize; }
+
+/* Generic control baselines for the hand-built canvas editors (MaskEditor and
+ * OpForm's MarginCanvas are live again in Inpaint/Outpaint modes; Compare/Lineage
+ * stay retained but unmounted). Lower specificity than every .pbx-* rule above, so
+ * they never override the stand-ins. */
 button {
   font: inherit;
 }

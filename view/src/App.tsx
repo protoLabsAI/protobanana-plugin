@@ -13,22 +13,24 @@ import {
   submitJob,
   subscribe,
 } from "./api";
-import { Composer } from "./Composer";
+import { ActionBar, type EditMode } from "./ActionBar";
+import { Composer, type Margins } from "./Composer";
 import { Gallery } from "./Gallery";
+import { StageView } from "./StageView";
 import {
   Badge,
   Banner,
   Button,
   Callout,
   Drawer,
-  Empty,
-  ImagesIcon,
   PanelHeader,
   Progress,
-  Skeleton,
   Spinner,
   Tabs,
+  ToastProvider,
 } from "./ds-pending";
+
+const ZERO_MARGINS: Margins = { left: 0, top: 0, right: 0, bottom: 0 };
 
 // Poll GET /jobs/{id} as a FALLBACK for the bus (design R1 / card): short
 // requests, never a long-poll. Whichever of the bus event or a poll lands first
@@ -273,6 +275,32 @@ export function App() {
   const [upload, setUpload] = useState<string>();
   const [prunedSelected, setPrunedSelected] = useState(false);
 
+  // The active edit verb on the current image (design §4.3). `null` is the
+  // default whole-image edit; the contextual modes put extra controls on the
+  // canvas (Inpaint mask, Outpaint margins) and in the composer. `mask` and
+  // `margins` are shared so the canvas and composer stay in lock-step (the
+  // composer's numeric margins are the WCAG 2.5.7 dragging alternative).
+  const [mode, setMode] = useState<EditMode>(null);
+  const [mask, setMask] = useState("");
+  const [margins, setMargins] = useState<Margins>(ZERO_MARGINS);
+  // A bounded recent-history slice for the Compose "pick from History" slots,
+  // emitted by the History grid (no extra fetch of its own).
+  const [records, setRecords] = useState<HistoryRecord[]>([]);
+
+  const leaveMode = useCallback(() => {
+    setMode(null);
+    setMask("");
+    setMargins(ZERO_MARGINS);
+  }, []);
+
+  const selectMode = useCallback((next: EditMode) => {
+    if (next === mode) return;
+    // Leaving via another verb must reset the canvas data just like Esc/×.
+    // Otherwise a remounted painter can submit a mask it no longer displays.
+    leaveMode();
+    setMode(next);
+  }, [mode, leaveMode]);
+
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [phases, setPhases] = useState<Record<number, { phase: Phase; jobId: string | null }>>({});
   const [callouts, setCallouts] = useState<{ item: QueueItem; phase: Extract<Phase, { kind: "failed" }>; jobId: string | null }[]>([]);
@@ -358,7 +386,8 @@ export function App() {
       created: Date.now() / 1000, starred: false, pruned: false });
     setUpload(undefined);
     setPrunedSelected(false);
-  }, []);
+    leaveMode(); // a fresh current image resets to the default edit verb
+  }, [leaveMode]);
 
   // History keeps listening on the bus (ADR 0039 / design §7): a late result for
   // a job whose error callout is still showing clears that callout and lands the
@@ -383,10 +412,11 @@ export function App() {
       setUpload(undefined);
       setPrunedSelected(Boolean(rec?.pruned));
       setSelected(rec);
+      leaveMode();
       setFocusError(rec ? "" : `Image ${focus.id} is not in Studio history. It may predate the Studio or have expired.`);
     }).catch(e => { if (alive) setFocusError(`Could not focus image ${focus.id}: ${e}`); });
     return () => { alive = false; };
-  }, [focus, reload]);
+  }, [focus, reload, leaveMode]);
 
   const loading = catalog === null && !unreachable;
 
@@ -397,6 +427,20 @@ export function App() {
   const currentMediaId = result?.mediaId || selected?.media_id || null;
   const editRef = upload || currentMediaId;
   const hasImage = Boolean(editRef) && !prunedSelected;
+  // The record backing the current image (for Vary params, Star, Send to agent).
+  // Uploads have no record; a pruned selection isn't editable.
+  const currentRecord = prunedSelected ? undefined : selected;
+
+  // MarginCanvas edits one edge; mirror it into the shared Margins (keeps the
+  // composer's numeric inputs in lock-step — WCAG 2.5.7).
+  const setMargin = useCallback((k: string, v: unknown) => {
+    setMargins(m => ({ ...m, [k]: Math.max(0, Number(v) || 0) }) as Margins);
+  }, []);
+
+  // Esc leaves the active mode (design §4.3 / §10).
+  const onRootKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape" && mode !== null) leaveMode();
+  };
 
   const submit = useCallback((req: JobRequest) => {
     setQueue(q => [...q, { id: ++sequence.current, request: req, startedAt: Date.now() }]);
@@ -431,6 +475,7 @@ export function App() {
     setUpload(undefined);
     setPrunedSelected(false);
     setFocusError("");
+    leaveMode();
     setFocusSignal(s => s + 1);
   };
 
@@ -440,6 +485,7 @@ export function App() {
     setPrunedSelected(rec.pruned);
     setSelected(rec);
     setFocusError("");
+    leaveMode();
     setDrawerOpen(false);
   };
 
@@ -452,10 +498,11 @@ export function App() {
       setResult(undefined);
       setPrunedSelected(false);
       setFocusError("");
+      leaveMode();
       setUpload(String(reader.result));
     };
     reader.readAsDataURL(file);
-  }, []);
+  }, [leaveMode]);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // Active render = the oldest in-flight job; it drives the canvas overlay.
@@ -515,11 +562,13 @@ export function App() {
       compact
       selectedId={selected?.media_id}
       onSelect={pickRecord}
+      onRecords={setRecords}
     />
   );
 
   return (
-    <div className={`images${narrow ? " is-narrow" : ""}`} ref={rootRef}>
+    <ToastProvider>
+    <div className={`images${narrow ? " is-narrow" : ""}`} ref={rootRef} onKeyDown={onRootKeyDown}>
       {queue.map(item => (
         <JobTracker key={item.id} item={item} onPhase={handlePhase} onDone={handleDone} onFail={handleFail} />
       ))}
@@ -595,37 +644,30 @@ export function App() {
           )}
           {focusError && <p className="banner banner-warn focus-error" role="alert">{focusError}</p>}
 
-          <div className="stage">
-            {loading ? (
-              <Skeleton className="stage-skeleton" />
-            ) : current ? (
-              <img className={`stage-img${activeRendering ? " is-dimmed" : ""}`} src={current} alt="Current image" />
-            ) : prunedSelected ? (
-              <Empty
-                className="stage-empty"
-                icon={<ImagesIcon />}
-                title="This image expired"
-                description="star images to keep them"
-              />
-            ) : !unreachable ? (
-              <Empty
-                className="stage-empty"
-                icon={<ImagesIcon />}
-                title="Describe an image to start"
-                description="Type a prompt below, or drop, paste, or upload an image."
-                action={<Button onClick={() => fileInput.current?.click()}>Upload</Button>}
-              />
-            ) : null}
-
-            {(activeRendering || calloutNodes.length > 0) && (
-              <div className="overlay" role="status">
-                {activeRendering && active && (
-                  <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
-                )}
-                {calloutNodes}
-              </div>
-            )}
-          </div>
+          <StageView
+            loading={loading}
+            hasImage={hasImage}
+            prunedSelected={prunedSelected}
+            unreachable={Boolean(unreachable)}
+            current={current}
+            editRef={editRef ?? ""}
+            mode={mode}
+            dimmed={activeRendering}
+            margins={margins}
+            setMargin={setMargin}
+            onMask={setMask}
+            onUpload={() => fileInput.current?.click()}
+            overlay={
+              (activeRendering || calloutNodes.length > 0) && (
+                <div className="overlay" role="status">
+                  {activeRendering && active && (
+                    <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
+                  )}
+                  {calloutNodes}
+                </div>
+              )
+            }
+          />
 
           <input
             ref={fileInput}
@@ -637,6 +679,21 @@ export function App() {
             onChange={(e) => { loadFile(e.target.files?.[0]); e.target.value = ""; }}
           />
 
+          {hasImage && (
+            <ActionBar
+              catalog={catalog}
+              record={currentRecord}
+              mediaId={currentMediaId}
+              imageRef={editRef}
+              imageUrl={current}
+              mode={mode}
+              narrow={narrow}
+              onSetMode={selectMode}
+              onSubmit={submit}
+              onFocusComposer={() => setFocusSignal(s => s + 1)}
+            />
+          )}
+
           <Composer
             catalog={catalog}
             hasImage={hasImage}
@@ -644,6 +701,12 @@ export function App() {
             parentId={currentMediaId}
             unreachable={Boolean(unreachable)}
             focusSignal={focusSignal}
+            mode={mode}
+            onLeaveMode={leaveMode}
+            mask={mask}
+            margins={margins}
+            onMarginsChange={setMargins}
+            records={records}
             onSubmit={submit}
           />
         </main>
@@ -657,5 +720,6 @@ export function App() {
         </Drawer>
       )}
     </div>
+    </ToastProvider>
   );
 }

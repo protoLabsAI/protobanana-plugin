@@ -15,7 +15,7 @@ inline in chat, and — on a vision model — is attached to the tool result so 
 | `edit_image` | `/images/edits` | `protolabs/qwen-image-edit` (`edit_model`); draft: `protolabs/qwen-image-edit-turbo` (`fast_edit_model`) | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
 | `region_edit` | `/images/edits` (+`grounding`) | `protolabs/qwen-image-region-edit` (`region_model`) | Change one object (SAM 3 mask), leave the rest untouched |
 | `remove_background` | `/images/edits` | `protolabs/qwen-image-bgremove` (`bgremove_model`) | Sticker/cutout on transparency (BiRefNet) |
-| `compose_images` | `/chat/completions` | `protolabs/qwen-image-multiref` (`compose_model`) | Combine 2–3 references into one image |
+| `compose_images` | `/chat/completions` | `protolabs/qwen-image-multiref` (`compose_model`) | Combine 2–10 references into one image (Qwen-Image-2.1 native multi-ref) |
 | `outpaint_image` | `/images/edits` (+margins) | `protolabs/qwen-image-outpaint` (`outpaint_model`) | Extend the canvas |
 | `inpaint_image` | `/images/edits` (+`mask_image`) | `protolabs/qwen-image-inpaint` (`inpaint_model`) | Paint or supply a source-sized alpha mask: transparent = edit, opaque = preserve. The mask rides a `mask_image` data-URL form field (the gateway's LiteLLM proxy drops an OpenAI `mask` file) |
 

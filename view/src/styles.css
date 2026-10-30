@@ -169,6 +169,38 @@ body {
   }
 }
 
+/* ---- catalog banners (S6) ----------------------------------------------- */
+
+.banner {
+  margin: 0 0 var(--gap);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Gateway catalog unreachable → running on the built-in schema. */
+.banner-stale {
+  border-color: var(--accent);
+}
+
+/* A configured alias the gateway doesn't know (alias drift, design R5). */
+.banner-warn {
+  border-color: var(--danger);
+}
+
+.banner-warn strong {
+  color: var(--danger);
+}
+
+.banner-warn ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
 /* ---- op nav ------------------------------------------------------------- */
 
 .op-nav {

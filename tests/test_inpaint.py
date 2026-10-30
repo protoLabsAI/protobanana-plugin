@@ -45,6 +45,8 @@ def test_multipart_and_saved_mask_lineage(plugin, monkeypatch, surface):
     captured = []
 
     def gateway(request):
+        if request.url.path == "/protobanana/catalog":
+            return httpx.Response(503)
         captured.append(request)
         return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(source).decode()}]})
 
@@ -103,6 +105,8 @@ def test_config_inpaint_model_routes_both_surfaces(tmp_path, monkeypatch, surfac
     captured = []
 
     def gateway(request):
+        if request.url.path == "/protobanana/catalog":
+            return httpx.Response(503)
         captured.append(request)
         return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(source).decode()}]})
 

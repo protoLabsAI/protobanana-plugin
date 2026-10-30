@@ -20,7 +20,7 @@ const records: HistoryRecord[] = ["root", "middle", "leaf"].map((id, i) => ({
   alias: "protolabs/qwen-image", params: { prompt: "A ceramic vase", seed: 42, ...(i ? { image: ["root", "middle"][i - 1] } : {}) },
   source: "studio", job_id: null, created: 1, starred: false, pruned: false,
 }));
-async function setup(page: Page, theme = "light", mode = "pending") {
+async function setup(page: Page, theme = "light", mode = "pending", ops = catalog) {
   const requests: JobRequest[] = [];
   await page.addInitScript(() => {
     (window as any).pluginKit = {
@@ -31,7 +31,7 @@ async function setup(page: Page, theme = "light", mode = "pending") {
   await page.route("**/_ds/**", route => route.fulfill({ body: "", contentType: "text/javascript" }));
   await page.route("**/fixture/**", async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: catalog } });
+    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops } });
     if (path.endsWith("/image")) return route.fulfill({ body: svg, contentType: "image/svg+xml" });
     if (path.endsWith("/history")) return route.fulfill({ json: { records, next_cursor: null } });
     if (path.endsWith("/jobs")) { requests.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { job_id: `job-${requests.length}` } }); }
@@ -362,4 +362,30 @@ test('S5: real kit module handshake preserves an early inbox message through a f
   await expect(page.getByAltText('Current result')).toBeVisible();
   expect(dataPaths).toContain('/agents/test/api/plugins/protobanana/history');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+
+test("S6: gateway aliases shown by the form are pinned on submission", async ({ page }) => {
+  const live = catalog.map(entry => entry.op === "generate" ? {
+    ...entry, aliases: { final: "gateway-final", draft: "gateway-turbo" },
+  } : entry);
+  const requests = await setup(page, "light", "pending", live);
+  await fill(page, live[0]);
+  await page.getByRole("button", { name: "Draft", exact: true }).click();
+  await expect(page.locator("form small.desc").first()).toHaveText("gateway-turbo");
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].alias).toBe("gateway-turbo");
+});
+
+test("S6: gateway-only operation renders its form and submits its alias", async ({ page }) => {
+  const extra: CatalogEntry = { ...catalog[0], op: "upscale", label: "Upscale",
+    aliases: { final: "gateway-upscale" }, params: { type: "object",
+      properties: { scale: { type: "integer", title: "Scale", default: 2 } }, required: [] } };
+  const requests = await setup(page, "light", "pending", [...catalog, extra]);
+  await page.getByLabel("Operation", { exact: true }).selectOption("upscale");
+  await page.getByLabel("Scale", { exact: true }).fill("4");
+  await page.getByRole("button", { name: "Upscale", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({ op: "upscale", alias: "gateway-upscale", params: { scale: 4 } });
 });

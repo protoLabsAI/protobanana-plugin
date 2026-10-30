@@ -178,6 +178,11 @@ function useImage(ref?: string | null) {
 
 export function App() {
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
+  // Catalog provenance (Studio S6): source "static" means the live gateway
+  // catalog was unreachable and we're on the built-in schema (→ banner);
+  // warnings flag configured aliases the gateway doesn't know (→ Settings hint).
+  const [catalogSource, setCatalogSource] = useState<string>("gateway");
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [op, setOp] = useState("generate");
   const [params, setParams] = useState<Record<string, unknown>>({});
@@ -214,7 +219,11 @@ export function App() {
   useEffect(() => {
     let alive = true;
     ready().then(async () => {
-      try { const ops = await fetchCatalog(); if (alive) setCatalog(ops); await reload(); }
+      try {
+        const cat = await fetchCatalog();
+        if (alive) { setCatalog(cat.ops); setCatalogSource(cat.source); setWarnings(cat.warnings); }
+        await reload();
+      }
       catch (e) { if (alive) setError(String(e)); }
     });
     return () => { alive = false; };
@@ -255,6 +264,14 @@ export function App() {
   return <div className="studio">
     <header className="topbar"><span className="dot" /><h1>protoBanana Studio</h1><span className="spacer" /><span className="hint">Playground</span></header>
     <aside className="pane left">
+      {catalogSource === "static" && <p className="banner banner-stale" role="status">
+        Showing the built-in schema — the live gateway catalog is unavailable. New models or
+        param changes won't appear until it's reachable again.
+      </p>}
+      {warnings.length > 0 && <div className="banner banner-warn" role="alert">
+        <strong>Settings</strong>
+        <ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+      </div>}
       <label className="field">Operation<select aria-label="Operation" value={op} onChange={e => setOp(e.target.value)}>
         {(catalog || []).map(e => <option key={e.op} value={e.op}>{e.label}</option>)}
       </select></label>

@@ -7,7 +7,7 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/plugins/protobanana/studio/assets/<file>``        its built assets (public)
 - ``/api/plugins/protobanana/jobs``        POST a render, GET recent (gated)
 - ``/api/plugins/protobanana/jobs/<id>``   GET one job's state (gated)
-- ``/api/plugins/protobanana/catalog``     GET the static param schema (gated)
+- ``/api/plugins/protobanana/catalog``     GET the gateway catalog, static fallback (gated)
 - ``/api/plugins/protobanana/history``     GET a cursor page (op/source/starred) (gated)
 - ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
 - ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
@@ -27,7 +27,7 @@ import). Evaluating annotations eagerly keeps the real classes on the handlers.
 
 from pathlib import Path
 
-from . import catalog_static, history, jobs
+from . import catalog, history, jobs
 
 _API = "/api/plugins/protobanana"
 _PAGE = "/plugins/protobanana/studio"
@@ -134,8 +134,12 @@ def build_router(registry):
 
     @router.get(f"{_API}/catalog")
     async def get_catalog():  # noqa: ANN202
+        """Serve the gateway catalog merged over the static schema, with a
+        ``source``/``stale`` flag, the ``workflows_hash`` (for S7's cache), and
+        any alias-drift warnings. Falls back to the static schema with
+        ``source=static``/``stale=true`` when the gateway is unreachable."""
         cfg = dict(getattr(registry, "live_config", lambda: registry.config)() or {})
-        return {"ops": catalog_static.build_catalog(cfg)}
+        return await catalog.build(cfg)
 
     # ---- shared history index (agent + studio) -----------------------------
     @router.get(f"{_API}/history")

@@ -29,7 +29,7 @@ import uuid
 from collections import OrderedDict
 from typing import NamedTuple
 
-from . import catalog_static, client
+from . import catalog, client
 
 log = logging.getLogger(__name__)
 
@@ -144,13 +144,15 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
     params = dict(params or {})
     tier = tier or "final"
     override = alias or params.get("alias")
-    resolved = catalog_static.alias_for(_cfg, op, tier, override)
     job_id = uuid.uuid4().hex
     locked = _lock_for(operator).locked()
     st = {
         "job_id": job_id,
         "op": op,
-        "alias": resolved,
+        # Gateway-primary: the alias is resolved from the merged snapshot in _run,
+        # the one source of truth (catalog.build()). An explicit override is shown
+        # at once; otherwise it fills in the moment the job starts.
+        "alias": override,
         "tier": tier,
         "params": params,
         "parent_id": parent_id,
@@ -168,6 +170,7 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
         # starting position for the queue strip (R2/R3).
         "queue_position": 1 if locked else 0,
         "_task": None,
+        "_override": override,
     }
     _remember(st)
     st["_task"] = asyncio.ensure_future(_run(job_id))
@@ -188,6 +191,22 @@ async def _run(job_id: str) -> None:
         while True:
             attempts += 1
             try:
+                if attempts == 1:
+                    # Gateway-primary: the merged snapshot from catalog.build() is
+                    # the ONE source of truth — it resolves the alias AND validates
+                    # the op. catalog_static is only the floor build() falls back to
+                    # when the gateway is down. Resolving here (not in submit) keeps
+                    # POST /jobs instant on a cold catalog; and because build() runs
+                    # INSIDE this try, any failure from it marks the job failed
+                    # rather than wedging it in 'running' with no terminal event.
+                    snapshot = await catalog.build(_cfg)
+                    entry = next((e for e in snapshot["ops"] if e.get("op") == st["op"]), None)
+                    if entry is None:
+                        raise ValueError(f"unknown op {st['op']!r} — not in the catalog")
+                    st["_catalog_entry"] = entry
+                    if not st["_override"]:
+                        tier = "realism" if st["op"] == "identity" and st["params"].get("realism") else st["tier"]
+                        st["alias"] = entry["aliases"].get(tier) or entry["aliases"].get("final")
                 # The gateway call AND the persist both live inside the try: if
                 # save_media raises, the task must still mark the job failed and
                 # publish job.failed, or the Studio view waits forever.
@@ -229,6 +248,36 @@ async def _run(job_id: str) -> None:
             return
 
 
+def _catalog_person_data_url(ref: str) -> str:
+    """Person ref → data URL small enough for the gateway's multipart cap.
+
+    The LiteLLM proxy rejects any non-file form part over 1024KB, and the
+    person ref rides a text field (data URL) because /v1/images/edits is
+    single-image by spec. The server caps the person ref to ~1MP anyway, so
+    shrinking client-side loses nothing."""
+    import base64
+
+    raw = _image(ref)
+    b64 = base64.b64encode(raw).decode()
+    if len(b64) <= 900_000:
+        return "data:image/png;base64," + b64
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except ImportError:
+        raise ValueError(
+            "person reference exceeds the gateway's 1MB form-part cap and Pillow "
+            "isn't installed to shrink it — run: protoagent plugin install-deps protobanana"
+        )
+
+
 async def _dispatch(st: dict) -> bytes:
     """Run one gateway call for the op — the SAME client.py functions the tools
     use. Returns the rendered PNG bytes."""
@@ -240,6 +289,11 @@ async def _dispatch(st: dict) -> bytes:
         raise ValueError(f"no alias for op {op!r} — unknown operation")
     seed = _seed(params.get("seed"))
 
+    # Built-in ops render through a hard-coded branch with op-specific imaging and
+    # fixed fields. The snapshot keeps their static form as the floor, so a
+    # gateway-added param can never reach a branch that would silently drop it; the
+    # alias was already resolved from the snapshot in _run. These op names are
+    # exactly catalog_static.OPS — any other op is gateway-only (below).
     if op == "generate":
         if params.get("n", 1) != 1:
             raise ValueError("Studio supports one image per job (n must be 1).")
@@ -259,44 +313,74 @@ async def _dispatch(st: dict) -> bytes:
             raise ValueError("Compose requires 2–10 reference images.")
         return await client.chat_compose(alias, params.get("prompt", ""),
                                          [_image(r) for r in refs])
-
-    # Remaining ops ride /images/edits with op-specific form fields.
-    prep = imaging.prepare(tools._resolve_image(params["image"]))
-    image = prep.data
-    if op == "edit":
-        raw = await client.edit(alias, params.get("prompt", ""), image,
-                                fields={"seed": seed,
-                                         "negative_prompt": params.get("negative_prompt") or None})
-        return imaging.finish_edit(raw, prep,
-                                   keep_transparency=params.get("keep_transparency", True))
-    if op == "inpaint":
-        # The mask's transparency IS the signal (transparent = the region to
-        # edit), so it must NOT go through _image()/imaging.prepare, which
-        # flattens alpha onto white — that would erase the region mark. Resolve
-        # it with its alpha intact.
-        mask = st.get("_mask")
-        if mask is None:
-            mask = imaging.validate_mask(tools._resolve_image(params["mask"]), image)
-            ref = _registry.save_media(mask, "image/png",
-                                       {"op": "mask", "image": params["image"],
-                                        "polarity": "transparent=edit"})
-            params["mask"] = ref.id
-            st["_mask"] = mask
-        return await client.edit(alias, params.get("prompt", ""), image,
-                                 fields={"seed": seed,
-                                         "negative_prompt": params.get("negative_prompt") or None},
-                                 mask=mask)
-    if op == "region_edit":
-        raw = await client.edit(alias, params.get("prompt", ""), image,
-                                fields={"grounding": params.get("grounding") or params.get("region"),
-                                         "seed": seed})
-        return imaging.finish_edit(raw, prep,
-                                   keep_transparency=params.get("keep_transparency", True))
-    if op == "outpaint":
+    if op in ("edit", "inpaint", "region_edit", "outpaint"):
+        # The built-in /images/edits family, each with op-specific form fields.
+        prep = imaging.prepare(tools._resolve_image(params["image"]))
+        image = prep.data
+        if op == "edit":
+            raw = await client.edit(alias, params.get("prompt", ""), image,
+                                    fields={"seed": seed,
+                                             "negative_prompt": params.get("negative_prompt") or None})
+            return imaging.finish_edit(raw, prep,
+                                       keep_transparency=params.get("keep_transparency", True))
+        if op == "inpaint":
+            # The mask's transparency IS the signal (transparent = the region to
+            # edit), so it must NOT go through _image()/imaging.prepare, which
+            # flattens alpha onto white — that would erase the region mark. Resolve
+            # it with its alpha intact.
+            mask = st.get("_mask")
+            if mask is None:
+                mask = imaging.validate_mask(tools._resolve_image(params["mask"]), image)
+                ref = _registry.save_media(mask, "image/png",
+                                           {"op": "mask", "image": params["image"],
+                                            "polarity": "transparent=edit"})
+                params["mask"] = ref.id
+                st["_mask"] = mask
+            return await client.edit(alias, params.get("prompt", ""), image,
+                                     fields={"seed": seed,
+                                             "negative_prompt": params.get("negative_prompt") or None},
+                                     mask=mask)
+        if op == "region_edit":
+            raw = await client.edit(alias, params.get("prompt", ""), image,
+                                    fields={"grounding": params.get("grounding") or params.get("region"),
+                                             "seed": seed})
+            return imaging.finish_edit(raw, prep,
+                                       keep_transparency=params.get("keep_transparency", True))
+        # outpaint
         margins = {k: int(params.get(k) or 0) for k in ("left", "top", "right", "bottom")}
         return await client.edit(alias, params.get("prompt") or "extend the scene", image,
                                  fields={**margins, "seed": seed})
-    raise ValueError(f"unknown op {op!r}")
+
+    # A gateway-only op: dispatch by the snapshot entry's declared route (generic
+    # field-forwarding). _run validated the op against the snapshot, and
+    # _normalize_entry only admits routes this path can dispatch, so the picker and
+    # the runner agree by construction.
+    entry = st.get("_catalog_entry")
+    if entry is None:
+        raise ValueError(f"unknown op {op!r}")
+    fields = {k: v for k, v in params.items()
+              if k in entry["params"]["properties"]
+              and k not in {"alias", "model", "response_format", "prompt", "image",
+                            "mask", "person_image", "images", "image_refs"}}
+    if "seed" in fields:
+        fields["seed"] = seed
+    route = entry["route"]
+    if route == "/images/generations":
+        if params.get("n", 1) != 1:
+            raise ValueError("Studio supports one image per job (n must be 1).")
+        size = fields.pop("size", None) or _cfg.get("default_size") or "1024x1024"
+        return await client.generate(alias, params.get("prompt", ""), size, fields=fields)
+    if route == "/images/edits":
+        if params.get("person_image"):
+            fields["person_image"] = _catalog_person_data_url(params["person_image"])
+        return await client.edit(alias, params.get("prompt", ""), _image(params["image"]),
+                                 fields=fields,
+                                 mask=_mask(params["mask"]) if params.get("mask") else None)
+    if route == "/chat/completions":
+        refs = params.get("images") or params.get("image_refs") or []
+        return await client.chat_compose(alias, params.get("prompt", ""),
+                                         [_image(r) for r in refs], fields=fields)
+    raise ValueError(f"unsupported catalog route {route!r}")
 
 
 def _seed(value) -> int | None:

@@ -794,6 +794,14 @@ async def _execute(run_id: str) -> None:
                      {"run_id": run_id, "step": sid, "op": op, "alias": alias})
             node_started = time.monotonic()
             raw = await _dispatch_step(op, alias, entry, scalar, ref_bytes)
+            # Saving is part of the step: a storage failure must leave a failed,
+            # resumable node, never a running node or a successful cache entry.
+            parent_id = _parent_media_id(step, run["nodes"])
+            params = _history_params(step, scalar, input_values, run["nodes"])
+            meta = {"source": "pipeline", "op": op, "alias": alias, "params": params,
+                    "parent_id": parent_id, "pipeline": run["pipeline"],
+                    "pipeline_run_id": run_id, "step": sid}
+            ref = _registry.save_media(raw, "image/png", meta)
         except Exception as exc:  # noqa: BLE001 - classified into a node result
             fail = jobs.classify(exc, alias=node.get("alias"))
             elapsed = round(time.monotonic() - started, 2)
@@ -807,18 +815,13 @@ async def _execute(run_id: str) -> None:
             _publish("protobanana.pipeline.run.done",
                      {"run_id": run_id, "pipeline": run["pipeline"], "status": "failed"})
             return
-        # Persist + cache + history + node.done.
-        parent_id = _parent_media_id(step, run["nodes"])
-        meta = {"source": "pipeline", "op": op, "alias": alias, "params": scalar,
-                "parent_id": parent_id, "pipeline": run["pipeline"],
-                "pipeline_run_id": run_id, "step": sid}
-        ref = _registry.save_media(raw, "image/png", meta)
+        # Cache + history + node.done only after the output is safely saved.
         run["_bytes"][sid] = raw
         _cache[key] = {"media_id": ref.id, "url": getattr(ref, "url", None), "bytes": raw}
         node.update(status="done", media_id=ref.id, url=getattr(ref, "url", None),
                     cached=False, elapsed_s=round(time.monotonic() - node_started, 2))
         history.record_pipeline(ref.id, run_id=run_id, pipeline=run["pipeline"], step=sid,
-                                op=op, alias=alias, params=scalar, parent_id=parent_id)
+                                op=op, alias=alias, params=params, parent_id=parent_id)
         _publish("protobanana.pipeline.node.done",
                  {"run_id": run_id, "step": sid, "op": op, "alias": alias,
                   "media_id": ref.id, "cached": False, "elapsed_s": node["elapsed_s"]})
@@ -928,6 +931,23 @@ async def _dispatch_step(op: str, alias: str, entry: dict, scalar: dict,
     st = {"op": op, "params": params, "alias": alias, "tier": "final",
           "_catalog_entry": entry}
     return await jobs._dispatch(st)
+
+
+def _history_params(step: dict, scalar: dict, input_values: dict, nodes: dict) -> dict:
+    """Job-shaped params for Gallery re-run/branch: replace graph references
+    with saved upstream media ids or the caller's resolved input references."""
+    def resolve(ref):
+        if ref in nodes:
+            return nodes[ref]["media_id"]
+        name = ref.split(".", 1)[1] if ref.startswith("inputs.") else ref
+        return input_values[name]
+
+    params = dict(scalar)
+    for port, ptype in _REF_PORTS.get(step["op"], {}).items():
+        if port in step:
+            params[port] = ([resolve(ref) for ref in step[port]] if ptype == "image_list"
+                            else resolve(step[port]))
+    return params
 
 
 def _parent_media_id(step: dict, nodes: dict) -> str | None:

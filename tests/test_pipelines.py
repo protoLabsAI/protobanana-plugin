@@ -362,6 +362,125 @@ def test_524_marks_only_that_node_recoverable_then_resumes(tmp_path, monkeypatch
     asyncio.run(scenario())
 
 
+# ============================================= persistence + history replay
+
+def test_media_save_failure_is_terminal_and_resumable(tmp_path, monkeypatch):
+    mod, reg = _load(tmp_path, config={"show_model": False})
+    gen, edit = _chain_stubs(mod, monkeypatch)
+    mod.pipelines.save_pipeline(CHAIN)
+    save = reg.save_media
+
+    def fail_second_output(raw, mime, meta):
+        if meta.get("step") == "b":
+            raise OSError("media disk full")
+        return save(raw, mime, meta)
+
+    monkeypatch.setattr(reg, "save_media", fail_second_output)
+
+    async def scenario():
+        out = await mod.tools.run_pipeline.ainvoke({"name": "chain3", "inputs": {}})
+        assert out.startswith("Error:") and "media disk full" in out
+        assert "Output saved as" not in out
+        st = mod.pipelines.recent_runs()[0]
+        rid = st["run_id"]
+        # Await directly as well: the background task must not have raised.
+        await _run_task(mod, rid)
+        assert st["status"] == "failed"
+        assert [st["nodes"][s]["status"] for s in ("a", "b", "c")] == [
+            "done", "failed", "pending"]
+        assert st["nodes"]["b"]["media_id"] is None
+        assert len(mod.pipelines._cache) == 1
+        assert len(mod.history.read()["records"]) == 1
+        failed = [d for t, d in reg.emitted if t == "protobanana.pipeline.node.failed"]
+        assert len(failed) == 1 and failed[0]["step"] == "b"
+        assert reg.emitted[-1][0] == "protobanana.pipeline.run.done"
+        assert reg.emitted[-1][1]["status"] == "failed"
+
+        monkeypatch.setattr(reg, "save_media", save)
+        assert mod.pipelines.resume_run(rid, from_step="b")
+        await _run_task(mod, rid)
+        assert mod.pipelines.get_run(rid)["status"] == "done"
+        assert len(gen) == 1 and len(edit) == 3
+        assert len(mod.history.read()["records"]) == 3
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("op", [
+    "edit", "region_edit", "outpaint", "remove_background", "inpaint", "compose",
+])
+def test_pipeline_history_can_replay_as_job(tmp_path, monkeypatch, op):
+    mod, reg = _load(tmp_path)
+    _chain_stubs(mod, monkeypatch)
+    calls = []
+
+    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
+        calls.append((image, mask))
+        return _solid_png("edited")
+
+    async def fake_compose(model, prompt, images):
+        calls.append(images)
+        return _solid_png("composed")
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    monkeypatch.setattr(mod.client, "chat_compose", fake_compose)
+    # FakeRegistry captures saves but has no media store; resolve its ids from
+    # the captured bytes while leaving real data URL resolution in place.
+    resolve = mod.tools._resolve_image
+
+    def resolve_saved(ref):
+        if ref.startswith("fake-media-"):
+            return reg.saved_media[int(ref.rsplit("-", 1)[1]) - 1][0]
+        return resolve(ref)
+
+    monkeypatch.setattr(mod.tools, "_resolve_image", resolve_saved)
+    external = _data_url(_solid_png("external"))
+    mask_buf = io.BytesIO()
+    Image.new("RGBA", (16, 16), (0, 0, 0, 0)).save(mask_buf, format="PNG")
+    mask_ref = _data_url(mask_buf.getvalue())
+    step = {"id": "result", "op": op, "params": {"prompt": "change", "seed": 17}}
+    if op == "compose":
+        step["images"] = ["root", "inputs.photo", "photo"]
+    else:
+        step["image"] = "root"
+    if op == "inpaint":
+        step["mask"] = "inputs.mask"
+    spec = {"id": "replay", "inputs": {
+        "photo": {"type": "image", "default": external}, "mask": "mask"},
+        "steps": [{"id": "root", "op": "generate", "params": {"prompt": "root"}}, step]}
+
+    async def scenario():
+        # Run twice with a changed leaf so its parent is also exercised as a
+        # cache hit. Both history records must reference the saved parent id.
+        for prompt in ("change", "change again"):
+            step["params"]["prompt"] = prompt
+            rid = mod.pipelines.start_run(spec, {"mask": mask_ref})
+            await _run_task(mod, rid)
+            st = mod.pipelines.get_run(rid)
+            assert st["status"] == "done"
+            assert st["cache_hits"] == (prompt == "change again")
+            rec = mod.history.read(source="pipeline")["records"][0]
+            params = rec["params"]
+            assert params["prompt"] == prompt and params["seed"] == 17
+            root_id = st["nodes"]["root"]["media_id"]
+            assert rec["parent_id"] == root_id
+            assert rec["pipeline_run_id"] == rid
+            if op == "compose":
+                assert params["images"] == [root_id, external, external]
+            else:
+                assert params["image"] == root_id
+            if op == "inpaint":
+                assert params["mask"] == mask_ref
+            assert reg.saved_media[-1][2]["params"] == params
+            original_call = calls[-1]
+            # Gallery passes a copy of rec.params into the normal job path.
+            await mod.jobs._dispatch({"op": rec["op"], "alias": rec["alias"],
+                                      "params": dict(params)})
+            assert calls[-1] == original_call
+
+    asyncio.run(scenario())
+
+
 # =================================================== r4: routes + survival
 
 def _app(reg):

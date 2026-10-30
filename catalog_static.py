@@ -69,7 +69,7 @@ def _schema(properties: dict, required: list[str]) -> dict:
 
 
 # One param JSON Schema per op, mirroring the design §1.2 table. ``image`` /
-# ``mask`` / ``person_image`` carry image references (media id, /media/ URL,
+# ``mask`` / ``images`` carry image references (media id, /media/ URL,
 # data URL, or path), resolved by the runner exactly as the tools resolve them.
 _PARAMS: dict[str, dict] = {
     "generate": _schema({

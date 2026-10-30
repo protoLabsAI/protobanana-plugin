@@ -395,7 +395,7 @@ async def remove_background(image_ref: str) -> str:
 
 @tool
 async def compose_images(image_refs: list[str], prompt: str) -> str:
-    """Compose 2–3 reference images into one new image (subjects, products,
+    """Compose 2–10 reference images into one new image (subjects, products,
     styles combined per the prompt).
 
     There is NO size or aspect-ratio control here: the gateway's compose
@@ -404,7 +404,7 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
     (add margins) on the result.
 
     Args:
-        image_refs: 2–3 references (media ids, /media/ URLs, data: URLs, or paths).
+        image_refs: 2–10 references (media ids, /media/ URLs, data: URLs, or paths).
         prompt: How to combine them — who/what goes where, style, setting.
             Name the references by position: "the man from <image1> sitting
             on the sofa in <image2>". This is also how to put a person into
@@ -413,8 +413,8 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
     """
     try:
         refs = [r for r in (image_refs or []) if str(r).strip()]
-        if not 2 <= len(refs) <= 3:
-            return f"Error: compose_images needs 2–3 image references, got {len(refs)}."
+        if not 2 <= len(refs) <= 10:
+            return f"Error: compose_images needs 2–10 image references, got {len(refs)}."
         raw = await client.chat_compose(CFG["compose_model"], prompt,
                                         [imaging.prepare(_resolve_image(r)).data for r in refs])
         # Keep the actual refs (not just their count) so a Gallery re-run of a

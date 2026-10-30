@@ -116,7 +116,9 @@ def test_region_edit_sends_grounding(plugin, monkeypatch):
 def test_compose_rejects_wrong_ref_count(plugin):
     mod, _ = plugin
     out = run(mod.tools.compose_images.ainvoke({"image_refs": [DATA_URL], "prompt": "combine"}))
-    assert out.startswith("Error:") and "2–3" in out
+    assert out.startswith("Error:") and "2–10" in out
+    out = run(mod.tools.compose_images.ainvoke({"image_refs": [DATA_URL] * 11, "prompt": "combine"}))
+    assert out.startswith("Error:") and "got 11" in out
 
 
 def test_outpaint_requires_a_margin(plugin):

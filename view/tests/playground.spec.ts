@@ -594,7 +594,7 @@ test("S5: a focus inbox message selects that image; unknown and spoofed ids are 
   await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
 });
 
-test("S5: History tile sends a draft to the chat composer; composeText keeps the UTF-8 byte limit", async ({ page }) => {
+test("S5: selected History image sends a draft to the chat composer; composeText keeps the UTF-8 byte limit", async ({ page }) => {
   const requests = await setup(page);
   await page.evaluate(() => {
     (window as any).drafts = [];
@@ -602,7 +602,8 @@ test("S5: History tile sends a draft to the chat composer; composeText keeps the
       if (e.data?.type === "protoagent:chat:compose") (window as any).drafts.push(e.data);
     });
   });
-  await page.locator(".g-tile").first().getByRole("button", { name: "Send to agent", exact: true }).click();
+  await pickTile(page, 0);
+  await bar(page).getByRole("button", { name: "Send to agent", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).drafts[0])).toEqual({
     type: "protoagent:chat:compose", text: 'Image root (generate, seed 42, prompt "A ceramic vase"): ',
@@ -989,3 +990,71 @@ test("Send to agent uses a distinct icon from Edit", async ({ page }) => {
   expect(sendPaths).not.toBe("");
   expect(sendPaths).not.toBe(editPaths);
 });
+
+for (const theme of ["light", "dark"]) {
+  for (const banner of [false, true]) {
+    test(`${theme}: large results fit a short stage (catalog banner: ${banner})`, async ({ page }) => {
+      await page.setViewportSize({ width: 1100, height: 700 });
+      await setup(page, theme);
+      await page.route("**/fixture/catalog", route => route.fulfill({
+        json: { ops: catalog, source: banner ? "static" : "gateway" },
+      }));
+      await page.reload();
+      await expect(page.locator(".banner-stale")).toHaveCount(banner ? 1 : 0);
+      for (const [index, width, height] of [[0, 1024, 1024], [1, 1344, 768], [2, 3200, 2000]]) {
+        await page.route(`**/fixture/history/${records[index].media_id}/image`, route => route.fulfill({
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
+          contentType: "image/svg+xml",
+        }));
+        await pickTile(page, index);
+        const img = page.getByAltText("Current image", { exact: true });
+        await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(width);
+        const geometry = await img.evaluate(el => {
+          const stage = el.closest(".stage")!;
+          const imageBox = el.getBoundingClientRect();
+          const stageBox = stage.getBoundingClientRect();
+          return {
+            inside: imageBox.left >= stageBox.left && imageBox.top >= stageBox.top
+              && imageBox.right <= stageBox.right && imageBox.bottom <= stageBox.bottom,
+            centered: Math.abs(imageBox.x + imageBox.width / 2 - stageBox.x - stageBox.width / 2) < 1
+              && Math.abs(imageBox.y + imageBox.height / 2 - stageBox.y - stageBox.height / 2) < 1,
+            height: stageBox.height,
+            scrollHeight: stage.scrollHeight, clientHeight: stage.clientHeight,
+            scrollWidth: stage.scrollWidth, clientWidth: stage.clientWidth,
+            fit: getComputedStyle(el).objectFit,
+          };
+        });
+        expect(geometry.height).toBeLessThan(500);
+        expect(geometry.inside).toBe(true);
+        expect(geometry.centered).toBe(true);
+        expect(geometry.scrollHeight).toBe(geometry.clientHeight);
+        expect(geometry.scrollWidth).toBe(geometry.clientWidth);
+        expect(geometry.fit).toBe("contain");
+      }
+    });
+  }
+
+  test(`${theme}: History is a three-column grid of named selectable thumbnails`, async ({ page }) => {
+    const recent = records.map(rec => ({ ...rec, source: "agent" as const, created: Date.now() / 1000 - 120 }));
+    await setup(page, theme, "pending", catalog, recent);
+    const tiles = page.locator(".g-tile");
+    await expect(tiles).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(tiles.nth(i).getByRole("button")).toHaveCount(1);
+      await expect(tiles.nth(i).getByRole("button")).toHaveAccessibleName(/render, 2 min ago/);
+      await expect(tiles.nth(i).locator(".g-agent")).toHaveText("agent");
+    }
+    const positions = await tiles.evaluateAll(els => els.map(el => {
+      const box = el.getBoundingClientRect();
+      return { x: box.x, y: box.y };
+    }));
+    expect(positions.every(pos => pos.y === positions[0].y)).toBe(true);
+    expect(new Set(positions.map(pos => pos.x)).size).toBe(3);
+    await tiles.first().getByRole("button").focus();
+    await expect(tiles.first().getByRole("tooltip")).toHaveText(/render, 2 min ago/);
+    await page.keyboard.press("Enter");
+    await expect(tiles.first().getByRole("button")).toHaveAttribute("aria-current", "true");
+    await expect(bar(page).getByRole("button", { name: "Star", exact: true })).toBeVisible();
+    await expect(bar(page).getByRole("button", { name: "Send to agent", exact: true })).toBeVisible();
+  });
+}

@@ -52,6 +52,52 @@ async function fill(page: Page, entry: CatalogEntry) {
     } else await page.getByLabel(schema.title!, { exact: true }).fill(key === "prompt" ? "A ceramic vase in soft afternoon light" : "the vase");
   }
 }
+
+test("history waits for a late-arriving plugin kit", async ({ page }) => {
+  const requests: string[] = [];
+  page.on("request", request => requests.push(request.url()));
+  await page.addInitScript(() => {
+    (window as any).kitCalls = [];
+    (window as any).historyErrorSeen = false;
+    new MutationObserver(() => {
+      if (document.body?.textContent?.includes("Could not load history")) {
+        (window as any).historyErrorSeen = true;
+      }
+    }).observe(document, { childList: true, subtree: true, characterData: true });
+    setTimeout(() => {
+      (window as any).pluginKit = {
+        initPluginView: () => ({}),
+        apiFetch: (path: string, init?: RequestInit) => {
+          (window as any).kitCalls.push(path);
+          return fetch(`/fixture/${path}`, init);
+        },
+      };
+    }, 400);
+  });
+  // Force the module import to fail so ready() waits for the late global kit.
+  await page.route("**/_ds/plugin-kit.js", route => route.abort());
+  await page.route("**/_ds/plugin-kit.css", route => route.fulfill({ body: "", contentType: "text/css" }));
+  await page.route("**/api/plugins/protobanana/**", route => route.fulfill({ status: 404 }));
+  await page.route("**/fixture/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: catalog } });
+    if (path.endsWith("/history")) return route.fulfill({ json: { records, next_cursor: null } });
+    return route.fulfill({ body: svg, contentType: "image/svg+xml" });
+  });
+  await page.goto("/plugins/protobanana/studio");
+  await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
+  expect(requests.filter(url => url.includes("api/plugins/protobanana/"))).toEqual([]);
+  await expect(page.locator(".g-tile")).toHaveCount(records.length);
+  await expect(page.getByText("Could not load history", { exact: false })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).historyErrorSeen)).toBe(false);
+  const dataRequests = requests.filter(url => /\/(history|catalog)([/?]|$)/.test(new URL(url).pathname));
+  expect(dataRequests.some(url => new URL(url).pathname === "/fixture/history")).toBe(true);
+  expect(dataRequests.some(url => new URL(url).pathname === "/fixture/catalog")).toBe(true);
+  const kitCalls: string[] = await page.evaluate(() => (window as any).kitCalls);
+  expect(dataRequests.map(url => new URL(url).pathname + new URL(url).search).sort())
+    .toEqual(kitCalls.map(path => `/fixture/${path}`).sort());
+});
+
 for (const theme of ["light", "dark", "mobile"]) {
   test(`${theme}: every single-image form submits and renders`, async ({ page }) => {
     if (theme === "mobile") await page.setViewportSize({ width: 390, height: 844 });

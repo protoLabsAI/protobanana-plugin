@@ -122,6 +122,30 @@ def test_api_module_uses_the_plugin_kit_handshake():
     assert re.search(r"initPluginView\s*\(", api), "api.ts never calls initPluginView()"
 
 
+def test_api_fetch_awaits_ready_before_selecting_transport():
+    """Early history requests must not race the asynchronous kit handshake."""
+    api = (SRC / "api.ts").read_text(encoding="utf-8")
+    body = re.search(r"export async function apiFetch\([^\n]+\{\n(.*?)\n\}", api, re.S)
+    assert body, "apiFetch wrapper is missing"
+    # Ignore comments so mentioning await ready() alone cannot satisfy the guard.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", body.group(1), flags=re.S)
+    ready = re.search(r"\bawait\s+ready\(\)\s*;", code)
+    assert ready, "apiFetch must await ready()"
+    assert ready.end() < code.index("if (_kit.apiFetch)"), "transport selected before ready()"
+    assert ready.end() < code.index("return fetch("), "standalone fetch runs before ready()"
+
+
+def test_images_rail_preserves_studio_route():
+    manifest = (PLUGIN_ROOT / "protoagent.plugin.yaml").read_text(encoding="utf-8")
+    first_view = re.search(r"^views:\n(  - [^\n]+\n.*?)(?=^  - |^\S|\Z)", manifest, re.M | re.S)
+    assert first_view, "manifest views are missing"
+    fields = dict(re.findall(r"^\s+(?:- )?(\w+):\s*([^\n]+)", first_view.group(1), re.M))
+    assert fields["label"] == "Images"
+    assert fields["icon"] == "Images"
+    assert fields["id"] == "studio"
+    assert fields["path"] == "/plugins/protobanana/studio"
+
+
 def test_committed_build_is_fresh_against_source():
     """Freshness guard (r6): distinctive string literals that live only in the
     view source must also appear in the committed bundle, so a source edit that

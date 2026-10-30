@@ -188,9 +188,11 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByRole("heading", { name: "Images", exact: true })).toBeVisible();
     await expect(page.getByText("protoBanana", { exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Playground", exact: true })).toHaveAttribute("aria-selected", "true");
+    // S8: the Pipelines tab is now ENABLED (no longer "Coming soon"); its body is
+    // exercised in pipelines.spec.ts.
     const pipelines = page.getByRole("tab", { name: "Pipelines", exact: true });
-    await expect(pipelines).toBeDisabled();
-    await expect(pipelines).toHaveAttribute("title", "Coming soon");
+    await expect(pipelines).not.toBeDisabled();
+    await expect(pipelines).not.toHaveAttribute("title", "Coming soon");
     await expect(page.getByRole("button", { name: "+ New", exact: true })).toBeVisible();
     await expect(page.locator(".history-col")).toBeVisible();
     await expect(page.getByRole("button", { name: "History", exact: true })).toHaveCount(0); // wide → no narrow button

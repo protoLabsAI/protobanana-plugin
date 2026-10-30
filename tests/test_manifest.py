@@ -27,10 +27,12 @@ def _manifest_scalar(key: str) -> str:
     return m.group(1).strip().strip("'\"")
 
 
-def test_manifest_declares_version_0_6_0():
+def test_manifest_version_includes_studio_s1_to_s5():
     """r1: 0.6.0 is the Studio S1–S5 release marker (was 0.5.0, set between S3
-    and S4)."""
-    assert _manifest_scalar("version") == "0.6.0"
+    and S4), so every later version must be >= 0.6.0. An exact pin would break
+    on each patch release."""
+    version = tuple(int(p) for p in _manifest_scalar("version").split("."))
+    assert version >= (0, 6, 0)
 
 
 def test_manifest_keeps_protoagent_floor_0_223_0():

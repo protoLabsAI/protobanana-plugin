@@ -145,11 +145,6 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
     tier = tier or "final"
     override = alias or params.get("alias")
     resolved = catalog_static.alias_for(_cfg, op, tier, override)
-    # The identity "Realism" checkbox is a selectable alias, not a tier (design
-    # §1.2): with no explicit override it picks the realism-LoRA variant, exactly
-    # as tools.identity_edit switches to realism_identity_model.
-    if op == "identity" and not override and params.get("realism"):
-        resolved = catalog_static.alias_for(_cfg, op, "realism")
     job_id = uuid.uuid4().hex
     locked = _lock_for(operator).locked()
     st = {
@@ -297,14 +292,6 @@ async def _dispatch(st: dict) -> bytes:
                                          "seed": seed})
         return imaging.finish_edit(raw, prep,
                                    keep_transparency=params.get("keep_transparency", True))
-    if op == "identity":
-        fields: dict = {"seed": seed}
-        if params.get("grounding_px"):
-            fields["grounding_px"] = params["grounding_px"]
-        if params.get("person_image"):
-            fields["person_image"] = _person_data_url(params["person_image"])
-        raw = await client.edit(alias, params.get("prompt", ""), image, fields=fields)
-        return imaging.finish_edit(raw, prep)
     if op == "outpaint":
         margins = {k: int(params.get(k) or 0) for k in ("left", "top", "right", "bottom")}
         return await client.edit(alias, params.get("prompt") or "extend the scene", image,
@@ -338,11 +325,6 @@ def _mask(ref: str) -> bytes:
     so the gateway always gets a PNG mask that still carries the region mark."""
     from . import imaging, tools
     return imaging.to_png(tools._resolve_image(ref))
-
-
-def _person_data_url(ref: str) -> str:
-    from . import imaging, tools
-    return tools._person_data_url(imaging.prepare(tools._resolve_image(ref)).data)
 
 
 def _publish(topic: str, data: dict) -> None:

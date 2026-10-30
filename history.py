@@ -53,7 +53,9 @@ _MAX_LIMIT = 200
 _TOOL_OP = {
     "generate_image": "generate",
     "edit_image": "edit",
-    "identity_edit": "identity",
+    # Retired Krea tool: new writes file under edit; records already logged
+    # as op "identity" are remapped at read time (_RETIRED_OP in _enrich).
+    "identity_edit": "edit",
     "region_edit": "region_edit",
     "remove_background": "remove_background",
     "compose_images": "compose",
@@ -312,9 +314,25 @@ def _load_tagged() -> list[dict]:
     return out
 
 
+# Retired Studio ops → the op that now covers them. The log is append-only,
+# so records written before the retirement are remapped at read time.
+_RETIRED_OP = {"identity": "edit"}  # Krea identity edit, retired in 0.5.0
+# Retired gateway aliases → their replacement, so a Gallery re-run of an old
+# record doesn't hit an alias the gateway no longer serves.
+_RETIRED_ALIAS = {
+    "protolabs/qwen-image-chat": "protolabs/qwen-image-multiref",
+    "protolabs/krea2-identity-edit": "protolabs/qwen-image-edit",
+    "protolabs/krea2-identity-edit-realism": "protolabs/qwen-image-edit",
+}
+
+
 def _enrich(rec: dict) -> dict:
     """Overlay the live starred/pruned state (authoritative from the filesystem,
-    not the log's write-time ``starred`` field)."""
+    not the log's write-time ``starred`` field), and remap retired ops/aliases."""
+    if rec.get("op") in _RETIRED_OP:
+        rec["op"] = _RETIRED_OP[rec["op"]]
+    if rec.get("alias") in _RETIRED_ALIAS:
+        rec["alias"] = _RETIRED_ALIAS[rec["alias"]]
     mid = rec.get("media_id")
     starred = is_starred(mid) if mid else False
     rec["starred"] = starred

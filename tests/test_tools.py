@@ -50,7 +50,7 @@ def run(coro):
 def test_register_wires_all_tools(plugin):
     _, reg = plugin
     names = {t.name for t in reg.tools}
-    assert names == {"generate_image", "edit_image", "identity_edit", "region_edit",
+    assert names == {"generate_image", "edit_image", "region_edit",
                      "remove_background", "compose_images", "outpaint_image", "inpaint_image"}
 
 
@@ -96,26 +96,6 @@ def test_gateway_failure_returns_readable_error(plugin, monkeypatch):
     monkeypatch.setattr(mod.client, "generate", boom)
     out = run(mod.tools.generate_image.ainvoke({"prompt": "a red fox"}))
     assert out.startswith("Error:") and "gateway unreachable" in out
-
-
-def test_identity_edit_two_ref_sends_person_field(plugin, monkeypatch):
-    mod, _ = plugin
-    seen = {}
-
-    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
-        seen.update({"model": model, "fields": dict(fields or {}), "image": image})
-        return PNG_1x1
-
-    monkeypatch.setattr(mod.client, "edit", fake_edit)
-    out = run(mod.tools.identity_edit.ainvoke({
-        "image_ref": OPAQUE_URL, "prompt": "place her on a beach",
-        "person_ref": OPAQUE_URL, "grounding_px": 1024,
-    }))
-    assert not out.startswith("Error:")
-    assert seen["model"] == "protolabs/krea2-identity-edit"
-    assert seen["image"] == PNG_OPAQUE  # image_ref = scene rides the spec image slot
-    assert seen["fields"]["person_image"].startswith("data:image/png;base64,")
-    assert seen["fields"]["grounding_px"] == 1024
 
 
 def test_region_edit_sends_grounding(plugin, monkeypatch):
@@ -176,21 +156,6 @@ def test_edit_draft_uses_fast_edit_model(plugin, monkeypatch):
     run(mod.tools.edit_image.ainvoke({"image_ref": DATA_URL, "prompt": "make it night", "draft": True}))
     run(mod.tools.edit_image.ainvoke({"image_ref": DATA_URL, "prompt": "make it night"}))
     assert seen == ["protolabs/qwen-image-edit-turbo", "protolabs/qwen-image-edit"]
-
-
-def test_identity_edit_realism_uses_realism_model(plugin, monkeypatch):
-    mod, _ = plugin
-    seen = {}
-
-    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
-        seen["model"] = model
-        return PNG_1x1
-
-    monkeypatch.setattr(mod.client, "edit", fake_edit)
-    run(mod.tools.identity_edit.ainvoke({"image_ref": DATA_URL,
-                                         "prompt": "natural photo at the beach",
-                                         "realism": True}))
-    assert seen["model"] == "protolabs/krea2-identity-edit-realism"
 
 
 def _mk_state():
@@ -304,7 +269,6 @@ def test_json_error_detail_is_kept(plugin, monkeypatch):
 @pytest.mark.parametrize("name,args", [
     ("generate_image", {"prompt": "fox"}),
     ("edit_image", {"image_ref": OPAQUE_URL, "prompt": "blue"}),
-    ("identity_edit", {"image_ref": OPAQUE_URL, "prompt": "blue"}),
     ("region_edit", {"image_ref": OPAQUE_URL, "region": "fox", "prompt": "blue"}),
     ("remove_background", {"image_ref": OPAQUE_URL}),
     ("compose_images", {"image_refs": [OPAQUE_URL, OPAQUE_URL], "prompt": "combine"}),
@@ -343,3 +307,24 @@ def test_each_tool_attaches_reference_chip(plugin, monkeypatch, name, args, show
 def test_reference_chip_rejects_non_pointer_props(plugin, props):
     _, reg = plugin
     assert reg.components["protobanana-ref"](props)
+
+
+def test_client_edit_sends_mask_as_data_url_field(plugin, monkeypatch):
+    """The gateway drops an OpenAI `mask` file before custom providers, so the
+    mask must ride the `mask_image` form field (protoBanana #54)."""
+    import httpx
+
+    mod, _ = plugin
+    seen = {}
+
+    def handler(request):
+        seen["body"] = request.content
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_1x1).decode()}]})
+
+    monkeypatch.setattr(mod.client, "_client",
+                        lambda: httpx.AsyncClient(base_url="http://gw", transport=httpx.MockTransport(handler)))
+    run(mod.client.edit("m", "p", PNG_1x1, mask=b"MASKBYTES"))
+    body = seen["body"]
+    assert b'name="mask_image"' in body
+    assert b"data:image/png;base64," + base64.b64encode(b"MASKBYTES") in body
+    assert b'name="mask";' not in body

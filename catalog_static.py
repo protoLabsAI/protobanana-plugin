@@ -4,14 +4,14 @@ The Studio view renders every operation form from data rather than hardcoding
 it. Until protoBanana ships ``GET /v1/protobanana/catalog`` behind the gateway
 (design §5.2, S6), the plugin carries this static mirror of the alias/param
 table in design §1.2. One entry per op (generate, edit, inpaint, region_edit,
-identity, outpaint, remove_background, compose), each with:
+outpaint, remove_background, compose), each with:
 
 - ``aliases``: the gateway alias per quality tier (``draft`` / ``final``),
   defaulting from the plugin config (``gen_model`` etc.) so settings stay the
   source of truth while the catalog is static;
 - ``params``: a JSON Schema the view turns into typed form controls;
-- ``inputs``: input arity (image count, mask, person ref);
-- ``licence``: flags such as RMBG being CC BY-NC (non-commercial);
+- ``inputs``: input arity (image count, mask);
+- ``licence``: flags such as a non-commercial model licence;
 - ``typical_latency_s``: used by the queue strip to show honest elapsed time.
 
 Host-free: this module reads a plain config dict and builds plain data, so the
@@ -42,20 +42,14 @@ _ALIASES: dict[str, dict[str, str | None]] = {
     "edit": {"draft": "fast_edit_model", "final": "edit_model"},
     "inpaint": {"draft": "inpaint_model", "final": "inpaint_model"},
     "region_edit": {"draft": "region_model", "final": "region_model"},
-    "identity": {
-        "draft": "identity_model",
-        "final": "identity_model",
-        # realism-LoRA variant — not a tier, but a selectable alias (design §1.2).
-        "realism": "realism_identity_model",
-    },
     "outpaint": {"draft": "outpaint_model", "final": "outpaint_model"},
     "remove_background": {"draft": "bgremove_model", "final": "bgremove_model"},
-    "compose": {"draft": "chat_model", "final": "chat_model"},
+    "compose": {"draft": "compose_model", "final": "compose_model"},
 }
 
 # The order Studio shows ops in (design §3.1 left column). Also fixes the set of
 # ops the catalog route returns.
-OPS = ["generate", "edit", "inpaint", "region_edit", "identity", "outpaint",
+OPS = ["generate", "edit", "inpaint", "region_edit", "outpaint",
        "remove_background", "compose"]
 
 _PROMPT = {"type": "string", "title": "Prompt"}
@@ -111,20 +105,6 @@ _PARAMS: dict[str, dict] = {
         "keep_transparency": _KEEP_TRANSPARENCY,
         "seed": _SEED,
     }, ["image", "grounding", "prompt"]),
-    "identity": _schema({
-        "image": {"type": "string", "title": "Scene / photo",
-                  "description": "The scene (two-ref) or the person's photo (single-ref)."},
-        "person_image": {"type": "string", "title": "Person ref",
-                         "description": "Two-ref mode: the person to place into the scene."},
-        "prompt": _PROMPT,
-        "grounding_px": {"type": "integer", "title": "Grounding px", "default": 0,
-                         "minimum": 0, "maximum": 1536,
-                         "description": "0 = gateway default (768); otherwise 512–1536. "
-                                        "Higher favours facial likeness."},
-        "seed": _SEED,
-        "realism": {"type": "boolean", "title": "Realism", "default": False,
-                    "description": "Realism-LoRA variant for photographic portraits."},
-    }, ["image", "prompt"]),
     "outpaint": _schema({
         "image": {"type": "string", "title": "Image"},
         "prompt": {"type": "string", "title": "Prompt", "default": "",
@@ -160,18 +140,12 @@ _META: dict[str, dict] = {
     "region_edit": {"label": "Region edit", "route": "/images/edits",
                     "inputs": {"images": 1, "mask": False, "person": False},
                     "typical_latency_s": 40},
-    "identity": {"label": "Identity", "route": "/images/edits",
-                 "inputs": {"images": 1, "mask": False, "person": True},
-                 "typical_latency_s": 40},
     "outpaint": {"label": "Outpaint", "route": "/images/edits",
                  "inputs": {"images": 1, "mask": False, "person": False},
                  "typical_latency_s": 38},
     "remove_background": {"label": "Remove background", "route": "/images/edits",
                           "inputs": {"images": 1, "mask": False, "person": False},
-                          "typical_latency_s": 12,
-                          # RMBG-2.0 is CC BY-NC (design §1.2, R9).
-                          "licence": {"non_commercial": True,
-                                      "note": "RMBG-2.0 is CC BY-NC"}},
+                          "typical_latency_s": 12},
     "compose": {"label": "Compose", "route": "/chat/completions",
                 "inputs": {"images": 10, "mask": False, "person": False},
                 "typical_latency_s": 40},

@@ -3,12 +3,12 @@
 Three call shapes, matching how protoBanana dispatches:
 
 - ``generate``  → POST /images/generations (JSON) — gen
-- ``edit``      → POST /images/edits (multipart) — edit / identity / region /
+- ``edit``      → POST /images/edits (multipart) — edit / inpaint / region /
   bgremove / outpaint. The endpoint is single-image by OpenAI spec, so extra
-  refs and knobs ride extra form fields (``person_image`` data URL,
-  ``grounding_px``, ``grounding``, outpaint margins) exactly like the OpenAI
+  inputs and knobs ride extra form fields (``mask_image`` data URL,
+  ``grounding``, outpaint margins) exactly like the OpenAI
   SDK's ``extra_body`` does.
-- ``chat_compose`` → POST /chat/completions on the auto-routing chat alias —
+- ``chat_compose`` → POST /chat/completions on the multiref alias —
   the only channel that accepts 2–3 reference images (multiref).
 
 Raises httpx errors / RuntimeError; tools translate to readable strings.
@@ -73,9 +73,11 @@ async def edit(model: str, prompt: str, image: bytes, *, fields: dict | None = N
     for key, value in (fields or {}).items():
         if value is not None:
             form[key] = str(value)
-    files = [("image", ("image.png", image, "image/png"))]
     if mask is not None:
-        files.append(("mask", ("mask.png", mask, "image/png")))
+        # A data-URL form field, not a `mask` file: the LiteLLM proxy drops the
+        # OpenAI mask file before custom providers (protoBanana #54).
+        form["mask_image"] = "data:image/png;base64," + base64.b64encode(mask).decode()
+    files = [("image", ("image.png", image, "image/png"))]
     async with _client() as client:
         resp = await client.post("/images/edits", data=form, files=files)
         resp.raise_for_status()

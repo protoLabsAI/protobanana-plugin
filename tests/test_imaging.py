@@ -154,17 +154,10 @@ def test_region_edit_on_cutout_never_returns_black(plugin, monkeypatch):
     assert result.getpixel((0, 0))[3] == 0
 
 
-def test_identity_and_outpaint_flatten_but_do_not_restore(plugin, monkeypatch):
+def test_outpaint_flattens_but_does_not_restore(plugin, monkeypatch):
     mod, reg = plugin
     seen = {}
     monkeypatch.setattr(mod.client, "edit", _fake_rgb_editor(seen))
-    run(
-        mod.tools.identity_edit.ainvoke(
-            {"image_ref": data_url(cutout()), "prompt": "on a beach"}
-        )
-    )
-    assert open_png(seen["image"]).getpixel((0, 0)) == (255, 255, 255)
-    assert open_png(reg.saved_media[-1][0]).mode == "RGB"
     run(
         mod.tools.outpaint_image.ainvoke({"image_ref": data_url(cutout()), "right": 64})
     )

@@ -110,7 +110,7 @@ def _upscale_op():
 
 def test_gateway_alias_appears_without_a_plugin_change(monkeypatch):
     """r1: a new op/alias added to the gateway catalog shows up in the merged
-    catalog — with its own form — and the eight static ops are still there."""
+    catalog — with its own form — and the seven static ops are still there."""
     mod, _ = _load()
     calls = []
     _install_gateway(monkeypatch, {"ops": [_upscale_op()], "workflows_hash": "wh-1"}, calls)
@@ -121,7 +121,7 @@ def test_gateway_alias_appears_without_a_plugin_change(monkeypatch):
     ops = {e["op"]: e for e in out["ops"]}
     assert "upscale" in ops  # pickable with no plugin release
     assert ops["upscale"]["params"]["properties"]["scale"]["default"] == 2  # its form
-    assert len(out["ops"]) == 9  # merged over the static eight, not replacing them
+    assert len(out["ops"]) == len(mod.catalog_static.OPS) + 1  # merged over the static seven, not replacing them
     assert calls == ["/protobanana/catalog"]
 
 
@@ -150,7 +150,7 @@ def test_gateway_entry_merges_aliases_but_keeps_static_form(monkeypatch):
     assert "guidance" not in g["params"]["properties"]
     assert g["params"] == mod.catalog_static.entry({}, "generate")["params"]
     assert any(e["op"] == "compose" for e in out["ops"])  # static-only op kept
-    assert len(out["ops"]) == 8
+    assert len(out["ops"]) == len(mod.catalog_static.OPS)
 
 
 def test_builtin_op_renders_through_static_branch_on_gateway_alias(monkeypatch):
@@ -188,32 +188,27 @@ def test_builtin_op_renders_through_static_branch_on_gateway_alias(monkeypatch):
 
 
 def test_merge_preserves_static_only_alias_tiers(monkeypatch):
-    """The blocking S6 bug: a gateway op carries ONLY the tiers it knows, so
-    merging its aliases must not drop a tier the static schema defines. identity's
-    ``realism`` variant (and an op's ``draft``) has to survive the merge — gateway
-    wins on the tiers it sends, static backstops the ones it omits."""
+    """Every tier in the static floor survives a partial gateway alias map."""
     mod, _ = _load()
-    # A gateway identity entry with draft/final only — no realism tier.
-    ident = {"op": "identity", "aliases": {"draft": "gw-identity", "final": "gw-identity"}}
-    _install_gateway(monkeypatch, {"ops": [ident]}, [])
-
+    monkeypatch.setitem(mod.catalog_static._ALIASES["generate"], "realism", "gen_model")
+    _install_gateway(monkeypatch, {"ops": [
+        {"op": "generate", "aliases": {"final": "gw-final"}},
+    ]}, [])
     out = asyncio.run(mod.catalog.build({}))
-
-    entry = next(e for e in out["ops"] if e["op"] == "identity")
-    assert entry["aliases"]["final"] == "gw-identity"  # gateway wins on final
-    assert entry["aliases"]["draft"] == "gw-identity"
-    # The static realism alias is preserved, not clobbered by a shallow merge.
-    assert entry["aliases"]["realism"] == "protolabs/krea2-identity-edit-realism"
+    entry = next(e for e in out["ops"] if e["op"] == "generate")
+    assert entry["aliases"]["final"] == "gw-final"
+    for tier in ("draft", "realism"):
+        assert entry["aliases"][tier] == mod.catalog_static.entry({}, "generate")["aliases"][tier]
 
 
 def test_realism_renders_on_realism_alias_under_gateway_catalog(monkeypatch):
-    """End-to-end for the blocking bug: with a live gateway catalog whose identity
-    entry omits the realism tier, a Realism job still renders on the realism alias
-    (preserved from the static schema in _run), not the plain identity model."""
+    """A gateway-only identity op renders using its own realism alias."""
     from test_jobs import PNG_1x1, _data_url
 
     mod, reg = _load()
-    ident = {"op": "identity", "aliases": {"draft": "gw-identity", "final": "gw-identity"}}
+    ident = {"op": "identity", "route": "/images/edits",
+             "aliases": {"final": "gw-identity", "realism": "gw-realism"},
+             "params": {"properties": {}, "required": []}}
     _install_gateway(monkeypatch, {"ops": [ident]}, [])
     rendered = []
 
@@ -228,8 +223,8 @@ def test_realism_renders_on_realism_alias_under_gateway_catalog(monkeypatch):
             "identity", {"image": _data_url(PNG_1x1), "prompt": "her", "realism": True})
         await mod.jobs._jobs[job_id]["_task"]
         assert mod.jobs.get_state(job_id)["status"] == "done"
-        assert mod.jobs.get_state(job_id)["alias"] == "protolabs/krea2-identity-edit-realism"
-        assert rendered == ["protolabs/krea2-identity-edit-realism"]
+        assert mod.jobs.get_state(job_id)["alias"] == "gw-realism"
+        assert rendered == ["gw-realism"]
 
     asyncio.run(scenario())
 
@@ -246,7 +241,7 @@ def test_unreachable_falls_back_to_static_stale(monkeypatch):
     assert out["workflows_hash"] is None
     assert "gateway unreachable" in out["warnings"][0]
     assert out["ops"] == mod.catalog_static.build_catalog({})
-    assert len(out["ops"]) == 8
+    assert len(out["ops"]) == len(mod.catalog_static.OPS)
 
 
 def test_http_error_falls_back_to_static(monkeypatch):
@@ -427,7 +422,7 @@ def test_catalog_route_serves_gateway_source(monkeypatch):
 
 
 def test_catalog_route_falls_back_when_unreachable(monkeypatch):
-    """r2 end-to-end: the gateway is down → GET /catalog still returns the eight
+    """r2 end-to-end: the gateway is down → GET /catalog still returns the seven
     static ops with source=static and stale=true (the view's banner trigger)."""
     mod, reg = _load()
     _boom_gateway(monkeypatch)
@@ -438,7 +433,7 @@ def test_catalog_route_falls_back_when_unreachable(monkeypatch):
             assert r.status_code == 200
             body = r.json()
             assert body["source"] == "static" and body["stale"] is True
-            assert len(body["ops"]) == 8
+            assert len(body["ops"]) == len(mod.catalog_static.OPS)
 
     asyncio.run(scenario())
 
@@ -665,7 +660,7 @@ def test_malformed_entries_are_dropped_before_merge(monkeypatch, field, value):
             assert response.status_code == 200
             result = response.json()
         assert result["source"] == "gateway"
-        assert len(result["ops"]) == 9
+        assert len(result["ops"]) == len(mod.catalog_static.OPS) + 1
         warnings = [w for w in result["warnings"] if "Dropped gateway op" in w]
         assert len(warnings) == 1
         assert field in warnings[0] and repr(bad["op"]) in warnings[0]
@@ -679,14 +674,15 @@ def test_missing_aliases_and_null_entries_are_rejected(monkeypatch, entry):
     mod, _ = _load()
     _install_gateway(monkeypatch, {"ops": [entry, _upscale_op()]}, [])
     result = asyncio.run(mod.catalog.build({}))
-    assert len(result["ops"]) == 9
+    assert len(result["ops"]) == len(mod.catalog_static.OPS) + 1
     assert any("Dropped gateway op" in w for w in result["warnings"])
     assert mod.catalog._cache["data"] is None
 
 
-@pytest.mark.parametrize("op,tier", [("identity", "realism"), ("generate", "draft")])
+@pytest.mark.parametrize("op,tier", [("generate", "realism"), ("generate", "draft")])
 def test_partial_tier_preserves_static_alias(monkeypatch, op, tier):
     mod, _ = _load()
+    monkeypatch.setitem(mod.catalog_static._ALIASES[op], "realism", "gen_model")
     _install_gateway(monkeypatch, {"ops": [{"op": op, "aliases": {"final": "live"}}]}, [])
     result = asyncio.run(mod.catalog.build({}))
     entry = next(e for e in result["ops"] if e["op"] == op)

@@ -145,11 +145,6 @@ def submit(op: str, params: dict | None = None, parent_id: str | None = None, *,
     tier = tier or "final"
     override = alias or params.get("alias")
     resolved = catalog_static.alias_for(_cfg, op, tier, override)
-    # The identity "Realism" checkbox is a selectable alias, not a tier (design
-    # §1.2): with no explicit override it picks the realism-LoRA variant, exactly
-    # as tools.identity_edit switches to realism_identity_model.
-    if op == "identity" and not override and params.get("realism"):
-        resolved = catalog_static.alias_for(_cfg, op, "realism")
     job_id = uuid.uuid4().hex
     locked = _lock_for(operator).locked()
     st = {
@@ -243,6 +238,36 @@ async def _run(job_id: str) -> None:
             return
 
 
+def _catalog_person_data_url(ref: str) -> str:
+    """Person ref → data URL small enough for the gateway's multipart cap.
+
+    The LiteLLM proxy rejects any non-file form part over 1024KB, and the
+    person ref rides a text field (data URL) because /v1/images/edits is
+    single-image by spec. The server caps the person ref to ~1MP anyway, so
+    shrinking client-side loses nothing."""
+    import base64
+
+    raw = _image(ref)
+    b64 = base64.b64encode(raw).decode()
+    if len(b64) <= 900_000:
+        return "data:image/png;base64," + b64
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except ImportError:
+        raise ValueError(
+            "person reference exceeds the gateway's 1MB form-part cap and Pillow "
+            "isn't installed to shrink it — run: protoagent plugin install-deps protobanana"
+        )
+
+
 async def _dispatch(st: dict) -> bytes:
     """Run one gateway call for the op — the SAME client.py functions the tools
     use. Returns the rendered PNG bytes."""
@@ -272,7 +297,7 @@ async def _dispatch(st: dict) -> bytes:
             return await client.generate(alias, params.get("prompt", ""), size, fields=fields)
         if route == "/images/edits":
             if params.get("person_image"):
-                fields["person_image"] = _person_data_url(params["person_image"])
+                fields["person_image"] = _catalog_person_data_url(params["person_image"])
             return await client.edit(alias, params.get("prompt", ""), _image(params["image"]),
                                      fields=fields,
                                      mask=_mask(params["mask"]) if params.get("mask") else None)
@@ -334,14 +359,6 @@ async def _dispatch(st: dict) -> bytes:
                                          "seed": seed})
         return imaging.finish_edit(raw, prep,
                                    keep_transparency=params.get("keep_transparency", True))
-    if op == "identity":
-        fields: dict = {"seed": seed}
-        if params.get("grounding_px"):
-            fields["grounding_px"] = params["grounding_px"]
-        if params.get("person_image"):
-            fields["person_image"] = _person_data_url(params["person_image"])
-        raw = await client.edit(alias, params.get("prompt", ""), image, fields=fields)
-        return imaging.finish_edit(raw, prep)
     if op == "outpaint":
         margins = {k: int(params.get(k) or 0) for k in ("left", "top", "right", "bottom")}
         return await client.edit(alias, params.get("prompt") or "extend the scene", image,
@@ -375,12 +392,6 @@ def _mask(ref: str) -> bytes:
     so the gateway always gets a PNG mask that still carries the region mark."""
     from . import imaging, tools
     return imaging.to_png(tools._resolve_image(ref))
-
-
-def _person_data_url(ref: str) -> str:
-    """Prepare a person reference and encode it for the gateway's edit fields."""
-    from . import tools
-    return tools._person_data_url(_image(ref))
 
 
 def _publish(topic: str, data: dict) -> None:

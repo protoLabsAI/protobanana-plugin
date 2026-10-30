@@ -2,7 +2,7 @@
 
 Native image generation and editing for [protoAgent](https://github.com/protoLabsAI/protoAgent),
 backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway — self-hosted
-ComfyUI workflows (Qwen-Image-2.1, Krea 2 identity edit, SAM 3 region edit, BiRefNet)
+ComfyUI workflows (Qwen-Image-2.1, SAM 3 region edit, BiRefNet)
 behind LiteLLM.
 
 The agent gets eight tools; every result is persisted to the core media store, renders
@@ -14,10 +14,9 @@ inline in chat, and — on a vision model — is attached to the tool result so 
 | `generate_image` | `/images/generations` | Text-to-image — `draft: true` routes to the 8-step Qwen-Image-2.1 Turbo tier (~10s vs ~32s warm) for rapid prototyping |
 | `inpaint_image` | `/images/edits` (+mask) | Paint or supply a source-sized alpha mask: transparent = edit, opaque = preserve |
 | `edit_image` | `/images/edits` | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
-| `identity_edit` | `/images/edits` (krea2 stems) | Face/identity-preserving edits — single-ref, or scene + person two-ref |
 | `region_edit` | `/images/edits` (+`grounding`) | Change one object, leave the rest untouched |
 | `remove_background` | `/images/edits` (bgremove) | Sticker/cutout on transparency |
-| `compose_images` | `/chat/completions` (auto-route) | Combine 2–3 references into one image |
+| `compose_images` | `/chat/completions` (multiref alias) | Combine 2–3 references into one image |
 | `outpaint_image` | `/images/edits` (+margins) | Extend the canvas |
 
 ## Install
@@ -44,9 +43,10 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 
 ## Notes
 
-- **Identity edit ordering is load-bearing**: two-ref mode is `image_ref` = scene,
-  `person_ref` = person. `grounding_px` (512–1536, default 768) trades edit adherence
-  (lower) against facial likeness (higher).
+- **Identity**: `edit_image` keeps a person's likeness when restyling or restaging
+  them, and `compose_images` places a person from one photo into another scene. Both
+  run on Qwen-Image-2.1, which held likeness as well as or better than the Krea 2
+  identity tool (and 3–4x faster), so `identity_edit` was dropped in 0.5.0.
 - **Text in images** (posters, logos, signs) goes through `generate_image` — Qwen-Image-2.1
   renders quoted text accurately, so there is no separate typography tool (Ideogram 4
   was dropped in 0.3.0).
@@ -54,7 +54,7 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
   Edit tools flatten a transparent input onto white before sending it;
   `edit_image` / `region_edit` then re-apply the input's transparency
   (`keep_transparency=false` keeps the filled-in backdrop instead, e.g. "put it on
-  a beach"). `identity_edit`, `outpaint_image`, `compose_images` flatten only.
+  a beach"). `outpaint_image` and `compose_images` flatten only.
 - **Sizes**: `generate_image` snaps `size` to a 16px grid (256–2048) and sends it as
   `width`/`height` too, because LiteLLM drops the standard `size` for custom
   providers (needs protoBanana#48 on the gateway). If the gateway still returns
@@ -70,6 +70,18 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
   none); reshape a composite with `outpaint_image`.
 - `show_model: false` turns off attaching results to the model (text-only models degrade
   automatically either way; core caps attachments at 2 MiB/image).
+
+## Versions
+
+- **0.6.0** — protoBanana Studio Playground (Studio S1–S5): a background **job** API and
+  completion events, the Studio console view with a shared history/gallery, a Playground
+  running all single-image ops, mask painting with `inpaint_image`, and **Send to agent**
+  plus `protobanana-ref` reference chips. Requires protoAgent **>= 0.223.0**.
+- **0.5.0** — Krea `identity_edit` dropped (Qwen-Image-2.1 holds likeness as well, 3–4x
+  faster); inpaint masks are sent as `mask_image`.
+- **0.4.1** — readable gateway errors (502/503/504/524 as one plain sentence) and no-op
+  edit detection (a `region_edit`/`edit_image` that didn't change the image is reported
+  as an error).
 
 ## Tests
 

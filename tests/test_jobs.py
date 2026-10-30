@@ -493,7 +493,11 @@ def _app(reg):
     from fastapi import FastAPI
 
     app = FastAPI()
-    app.include_router(reg.routers[-1][1])
+    # Mount exactly as core's registry does (graph/plugins/registry.py
+    # register_router): a None prefix means the namespaced default
+    # /plugins/<id>, so a router with absolute paths must pass prefix="".
+    prefix, router = reg.routers[-1]
+    app.include_router(router, prefix="/plugins/protobanana" if prefix is None else prefix)
     return app
 
 

@@ -30,4 +30,7 @@ def register(registry) -> None:
     # Studio: the job runner reuses client.py + save_media + the event bus; the
     # router serves the public view page and the gated data routes.
     jobs.configure(registry)
-    registry.register_router(routes.build_router(registry))
+    # The router declares absolute paths (/plugins/protobanana/studio and
+    # /api/plugins/protobanana/...), so mount it at the root: the default
+    # prefix /plugins/<id> would double them and 404 every Studio route.
+    registry.register_router(routes.build_router(registry), prefix="")

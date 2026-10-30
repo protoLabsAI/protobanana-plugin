@@ -211,24 +211,53 @@ def _transparency_note(prep: imaging.Prepared, restored: bool) -> str:
     return "The input was transparent: it was flattened onto white for the edit."
 
 
+_UPSTREAM_DOWN = {502: "the gateway couldn't reach the image server",
+                  503: "the image server is unavailable or overloaded",
+                  504: "the image server didn't answer in time"}
+
+
+def _looks_like_html(text: str) -> bool:
+    head = (text or "").lstrip()[:200].lower()
+    return head.startswith("<!doctype") or head.startswith("<html") or "<head" in head
+
+
 def _err(e: Exception) -> str:
+    """Exception → one readable line for the model. Never echoes an HTML page:
+    a Cloudflare/proxy error body is noise to the model, and seeing raw HTML
+    makes it tell users "the service is down" and retry in a loop."""
     try:
         import httpx
 
         if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            if status == 524:
+                return ("Error: the image server took longer than the gateway's ~100s limit "
+                        "(HTTP 524). The job may still be running on the server — wait a minute "
+                        "before retrying once, or try draft=true or a smaller size.")
+            if status in _UPSTREAM_DOWN:
+                return (f"Error: {_UPSTREAM_DOWN[status]} (HTTP {status}). This is usually "
+                        "temporary — wait a minute before retrying once; don't retry in a loop.")
             detail = ""
             try:
                 detail = (e.response.json().get("error") or {}).get("message", "")
             except ValueError:
-                detail = e.response.text[:200]
-            hint = " (alias missing from the gateway model_list?)" if e.response.status_code == 404 else ""
-            return f"Error: gateway returned {e.response.status_code}{hint}: {detail or 'no detail'}"
+                detail = e.response.text
+            detail = "" if _looks_like_html(detail) else " ".join(str(detail).split())[:200]
+            hint = " (alias missing from the gateway model_list?)" if status == 404 else ""
+            return f"Error: gateway returned {status}{hint}: {detail or 'no detail'}"
         if isinstance(e, httpx.TimeoutException):
             return ("Error: gateway timed out — the render may still be queued on ComfyUI. "
                     "Try once more, or raise timeout_s in the protobanana plugin settings.")
     except ImportError:
         pass
     return f"Error: {type(e).__name__}: {e}"
+
+
+_NO_CHANGE_REGION = ("Error: region_edit changed nothing — the region {region!r} wasn't found in "
+                     "the image. Describe it differently (a short noun phrase for what is "
+                     "visible, e.g. \"the red car\"), or use edit_image for a whole-image change.")
+_NO_CHANGE_EDIT = ("Error: edit_image returned the image unchanged. Rephrase the instruction "
+                   "more concretely, or use region_edit to target one object.")
 
 
 def _seed(seed: int) -> int | None:
@@ -293,6 +322,8 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         model = CFG["fast_edit_model"] if draft else CFG["edit_model"]
         prep = imaging.prepare(_resolve_image(image_ref))
         raw = await client.edit(model, prompt, prep.data, fields={"seed": _seed(seed)})
+        if imaging.unchanged(prep.data, raw):
+            return _NO_CHANGE_EDIT
         raw = imaging.finish_edit(raw, prep, keep_transparency=keep_transparency)
         note = " ".join(filter(None, (_transparency_note(prep, keep_transparency),
                                       _size_note(raw, prep.size, "the input was"))))
@@ -371,6 +402,8 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
         prep = imaging.prepare(_resolve_image(image_ref))
         raw = await client.edit(CFG["region_model"], prompt, prep.data,
                                 fields={"grounding": region, "seed": _seed(seed)})
+        if imaging.unchanged(prep.data, raw):
+            return _NO_CHANGE_REGION.format(region=region)
         raw = imaging.finish_edit(raw, prep, keep_transparency=keep_transparency)
         return _finish(raw, _caption(f"{region} → {prompt}", "Edit: "),
                        {"tool": "region_edit", "region": region, "prompt": prompt},
@@ -404,6 +437,11 @@ async def remove_background(image_ref: str) -> str:
 async def compose_images(image_refs: list[str], prompt: str) -> str:
     """Compose 2–3 reference images into one new image (subjects, products,
     styles combined per the prompt).
+
+    There is NO size or aspect-ratio control here: the gateway's compose
+    (multiref) route takes no size, so don't promise the user "portrait" or
+    "16:9" from this tool. To change the shape afterwards, use outpaint_image
+    (add margins) on the result.
 
     Args:
         image_refs: 2–3 references (media ids, /media/ URLs, data: URLs, or paths).

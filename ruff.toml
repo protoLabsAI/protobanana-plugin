@@ -1,0 +1,8 @@
+# Lint gate for CI. Kept to ruff's defaults plus pyflakes/pycodestyle errors —
+# the code predates a formatter, so style rules (and E501) are not enforced.
+line-length = 110
+target-version = "py311"
+extend-exclude = ["tests/_plugin_testkit.py"]  # vendored verbatim from protoAgent core
+
+[lint]
+select = ["E4", "E7", "E9", "F", "W6"]

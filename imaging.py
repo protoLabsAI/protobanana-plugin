@@ -406,3 +406,39 @@ def _boost_alpha(layer):
     layer = layer.copy()
     layer.putalpha(a)
     return layer
+
+
+# A pixel counts as "changed" when any channel moved by more than this —
+# above PNG/lanczos round-trip noise, far below any visible edit.
+_CHANGE_THRESHOLD = 8
+# An edit that touched less than this fraction of pixels changed nothing
+# (0.02% ≈ 200 px at 1MP: a real region edit changes thousands).
+_UNCHANGED_FRACTION = 0.0002
+
+
+def unchanged(before: bytes, after: bytes) -> bool:
+    """True when ``after`` is (near-)pixel-identical to ``before``.
+
+    Catches a region edit whose segmenter matched nothing (empty mask → the
+    composite returns the input). Byte equality is checked first (no Pillow
+    needed); otherwise the result is compared at the input's size and counts
+    pixels that moved by more than a few levels. Returns False whenever it
+    can't tell, so it never blocks a real result."""
+    if before == after:
+        return True
+    Image = _pil()
+    if Image is None:
+        return False
+    try:
+        from PIL import ImageChops
+
+        a = Image.open(io.BytesIO(before)).convert("RGB")
+        b = Image.open(io.BytesIO(after)).convert("RGB")
+        if b.size != a.size:
+            b = b.resize(a.size, Image.LANCZOS)
+        diff = ImageChops.difference(a, b).convert("L")
+        hist = diff.histogram()
+        moved = sum(hist[_CHANGE_THRESHOLD + 1 :])
+        return moved < _UNCHANGED_FRACTION * a.size[0] * a.size[1]
+    except Exception:  # noqa: BLE001 — a failed check must never fail the tool
+        return False

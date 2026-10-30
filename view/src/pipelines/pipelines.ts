@@ -5,6 +5,8 @@
 // the backend pipelines.py (SPEC_SCHEMA, validate, _REF_PORTS, _param_port_type)
 // so a spec the canvas saves passes the real validator unchanged (acceptance r3).
 
+import { load as loadYaml } from "js-yaml";
+
 import {
   apiFetch,
   fetchCatalog,
@@ -83,6 +85,10 @@ export interface OpNodeData {
   // promotion). A promoted param wired from an input becomes `{{inputs.NAME}}`.
   promoted: string[];
   tier: string;
+  // The step's gateway-model alias (spec `step.alias`, consumed by pipelines.py
+  // `_resolve_alias`). The canvas doesn't edit it, but it is round-tripped so a
+  // loaded/imported spec's aliases survive Save (it is not a ref/widget).
+  alias?: string;
 }
 
 export interface InputNodeData {
@@ -286,6 +292,9 @@ export function graphToSpec(nodes: GNode[], edges: GEdge[], meta: SpecMeta): Spe
       }
     }
     if (n.data.tier && n.data.tier !== "final") step.tier = n.data.tier;
+    // Preserve the step's gateway-model alias so a loaded/imported spec keeps
+    // its model selection (pipelines.py `_resolve_alias` prefers step.alias).
+    if (n.data.alias) step.alias = n.data.alias;
     return step;
   });
 
@@ -364,7 +373,7 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
       id: step.id,
       type: "op",
       position: posFor(step.id),
-      data: { kind: "op", op: step.op, label: entry?.label || step.op, params, promoted, tier: step.tier || "final" },
+      data: { kind: "op", op: step.op, label: entry?.label || step.op, params, promoted, tier: step.tier || "final", alias: step.alias },
     });
     // Ref ports → edges.
     for (const port of REF_PORTS[step.op] || []) {
@@ -385,8 +394,9 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
 export function autoLayout(nodes: GNode[], edges: GEdge[]): GNode[] {
   const depth: Record<string, number> = {};
   const order = [...runOrder(nodes, edges)];
-  // Inputs sit left of the op that consumes them.
-  for (const n of nodes) depth[n.id] = n.data.kind === "input" ? 0 : 0;
+  // Every node starts at depth 0; settle() below raises each to one past its
+  // deepest input (inputs stay at 0 unless they feed something).
+  for (const n of nodes) depth[n.id] = 0;
   const incoming: Record<string, string[]> = {};
   for (const n of nodes) incoming[n.id] = [];
   for (const e of edges) incoming[e.target]?.push(e.source);
@@ -408,6 +418,18 @@ export function autoLayout(nodes: GNode[], edges: GEdge[]): GNode[] {
 export function slugifyId(name: string): string {
   const s = (name || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").replace(/^[^a-z0-9]+/, "");
   return s || "pipeline";
+}
+
+/** Parse an imported spec file into a Spec. The import picker offers .json AND
+ *  .yaml/.yml (the formats the backend `_load_text_spec` reads); JSON is a
+ *  subset of YAML, so one YAML parse handles both the canvas's own .json export
+ *  and a hand-authored .yaml spec. Throws on malformed input or a non-object. */
+export function parseSpecText(text: string): Spec {
+  const data = loadYaml(text);
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("not a pipeline spec");
+  }
+  return data as Spec;
 }
 
 // --------------------------------------------------------- api wrappers

@@ -71,6 +71,7 @@ import {
   paramHandle,
   paramOfHandle,
   paramPortType,
+  parseSpecText,
   registerKeybindings,
   resumeRun,
   runPipeline,
@@ -90,6 +91,7 @@ import {
   type PortType,
   type RunNode,
   type Spec,
+  type SpecMeta,
 } from "./pipelines";
 
 // Aspect presets, mirrored from Composer.tsx so the inspector options popover
@@ -455,7 +457,11 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ id: string; name: string }>(() => ({ id: "untitled_pipeline", name: "Untitled pipeline" }));
+  // The spec's non-graph metadata. `description` and `expose_as_tool` are not
+  // edited on the canvas but are round-tripped so a loaded/imported pipeline
+  // keeps its agent-tool exposure and description on Save (pipeline_tool_factory
+  // requires expose_as_tool === true).
+  const [meta, setMeta] = useState<SpecMeta>(() => ({ id: "untitled_pipeline", name: "Untitled pipeline" }));
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
 
   const [runId, setRunId] = useState<string | null>(null);
@@ -480,7 +486,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     const g = specToGraph(spec, catalog || []);
     setNodes(g.nodes as unknown as Node[]);
     setEdges(g.edges as unknown as Edge[]);
-    setMeta({ id: spec.id, name: spec.name || spec.id });
+    setMeta({ id: spec.id, name: spec.name || spec.id, description: spec.description, expose_as_tool: spec.expose_as_tool });
     setSelectedId(null);
     setRunId(null);
     setRunStatus("idle");
@@ -596,7 +602,9 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   // ---- save / load / duplicate / export / import / auto-layout ------------
 
-  const currentSpec = useCallback((): Spec => graphToSpec(asGraph().nodes, asGraph().edges, { id: meta.id, name: meta.name }), [asGraph, meta]);
+  // Pass the WHOLE meta (not just id/name) so `description` and `expose_as_tool`
+  // survive Save — graphToSpec writes them back onto the spec.
+  const currentSpec = useCallback((): Spec => graphToSpec(asGraph().nodes, asGraph().edges, meta), [asGraph, meta]);
 
   const doSave = useCallback(async (): Promise<Spec | null> => {
     const spec = currentSpec();
@@ -623,7 +631,9 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   const doDuplicate = useCallback(() => {
     const id = slugifyId(`${meta.id}-copy`);
-    setMeta({ id, name: `${meta.name} (copy)` });
+    // A duplicate is a full copy: keep description/expose_as_tool, only the id
+    // and name change.
+    setMeta((m) => ({ ...m, id, name: `${m.name} (copy)` }));
     setRunId(null); setRunStatus("idle"); setRunNodes({});
     toast("Duplicated — save to keep it");
   }, [meta, toast]);
@@ -643,7 +653,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      try { openSpec(JSON.parse(String(reader.result)) as Spec); toast("Pipeline imported"); }
+      try { openSpec(parseSpecText(String(reader.result))); toast("Pipeline imported"); }
       catch { toast("Could not parse that file"); }
     };
     reader.readAsText(file);
@@ -813,7 +823,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       <div className="pbx-pipeline-panel">
         <FormField label="Name">
           <Input aria-label="Pipeline name" value={meta.name}
-            onChange={(e) => setMeta(() => ({ name: e.target.value, id: slugifyId(e.target.value) }))} />
+            onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value, id: slugifyId(e.target.value) }))} />
         </FormField>
         <div className="pbx-pipeline-actions">
           <Button size="xs" variant="ghost" onClick={doNew}>New</Button>

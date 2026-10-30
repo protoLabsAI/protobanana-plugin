@@ -11,6 +11,7 @@ import {
   OUT_HANDLE,
   paramHandle,
   paramPortType,
+  parseSpecText,
   specToGraph,
   type GEdge,
   type GNode,
@@ -126,6 +127,40 @@ test("round trip canvas graph → spec → graph preserves steps, refs and ui.po
   expect(b.nodes).toEqual(a.nodes);
   expect(b.positions).toEqual(a.positions);
   expect(b.edges).toEqual(a.edges);
+});
+
+// The round trip must carry the fields the backend uses but the canvas doesn't
+// render as graph: the spec `description`/`expose_as_tool` (so a pipeline keeps
+// its agent-tool exposure — pipeline_tool_factory requires expose_as_tool) and
+// every step `alias` (so a step keeps its gateway model — _resolve_alias prefers
+// step.alias). Regression for the review's confirmed Save-drops-fields finding.
+test("round trip preserves step.alias and the description/expose_as_tool metadata", () => {
+  const gen = makeOpNode(entry("generate"), { x: 40, y: 40 }, "gen");
+  (gen.data as OpNodeData).alias = "protolabs/qwen-image";
+  const spec = graphToSpec([gen], [], {
+    id: "tool", name: "Tool", description: "An exposed pipeline", expose_as_tool: true,
+  });
+  expect(spec.description).toBe("An exposed pipeline");
+  expect(spec.expose_as_tool).toBe(true);
+  expect(spec.steps.find((s) => s.id === "gen")!.alias).toBe("protolabs/qwen-image");
+  expect(validateSpec(spec)).toEqual({ ok: true, error: "" });
+
+  // specToGraph restores the alias onto the op node, so a re-save keeps it.
+  const g = specToGraph(spec, catalog);
+  expect((g.nodes.find((n) => n.id === "gen")!.data as OpNodeData).alias).toBe("protolabs/qwen-image");
+});
+
+// The import picker offers both .json and .yaml/.yml (the formats the backend
+// `_load_text_spec` reads); parseSpecText must handle both. Regression for the
+// confirmed "picker offers YAML, import only runs JSON.parse" finding.
+test("parseSpecText reads both JSON and YAML specs and rejects non-objects", () => {
+  const fromJson = parseSpecText('{"id":"j","steps":[{"id":"gen","op":"generate"}]}');
+  expect(fromJson.id).toBe("j");
+  const fromYaml = parseSpecText("id: y\nname: Y\nsteps:\n  - id: gen\n    op: generate\n");
+  expect(fromYaml.id).toBe("y");
+  expect(fromYaml.steps[0].op).toBe("generate");
+  expect(() => parseSpecText("just a scalar")).toThrow();
+  expect(() => parseSpecText("")).toThrow();
 });
 
 test("a canvas-saved spec passes the real pipelines.validate; an image→text spec is refused", () => {
@@ -508,6 +543,31 @@ test("input rename preserves selection, wires and saved positions", async ({ pag
   expect(saved.steps[0].image).toBe("photo_new");
   expect(saved.steps[0].params?.prompt).toBe("{{inputs.caption}}");
   expect(saved.ui?.positions?.[inputNodeId("photo_new")]).toEqual({ x: 20, y: 30 });
+  expect(validateSpec(saved)).toEqual({ ok: true, error: "" });
+});
+
+// Loading a spec, then Save, must not drop the fields the canvas doesn't render
+// as graph. End-to-end proof (openSpec → currentSpec → POST /pipelines) of the
+// review's confirmed Save-drops-fields finding.
+test("Save keeps a loaded spec's description, expose_as_tool and step alias", async ({ page }) => {
+  const seed: Spec = {
+    id: "exposed", name: "Exposed",
+    description: "A pipeline exposed as an agent tool",
+    expose_as_tool: true,
+    steps: [{ id: "gen", op: "generate", alias: "protolabs/qwen-image", params: { prompt: "a cat" } }],
+    output: "gen",
+    ui: { positions: { gen: { x: 60, y: 90 } } },
+  };
+  const captured = await setup(page, { seed });
+  await openPipelines(page);
+  await expect(page.locator(".pbx-node--op")).toHaveCount(1);
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => captured.save.length).toBe(1);
+  const saved = captured.save[0] as unknown as Spec;
+  expect(saved.description).toBe("A pipeline exposed as an agent tool");
+  expect(saved.expose_as_tool).toBe(true);
+  expect(saved.steps.find((s) => s.id === "gen")?.alias).toBe("protolabs/qwen-image");
   expect(validateSpec(saved)).toEqual({ ok: true, error: "" });
 });
 

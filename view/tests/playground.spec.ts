@@ -26,7 +26,7 @@ const records: HistoryRecord[] = ["root", "middle", "leaf"].map((id, i) => ({
   source: "studio", job_id: null, created: 1, starred: false, pruned: false,
 }));
 
-async function setup(page: Page, theme = "light", mode: "pending" | "timeout" = "pending", ops = catalog) {
+async function setup(page: Page, theme = "light", mode: "pending" | "timeout" = "pending", ops = catalog, historyRecords = records) {
   const requests: JobRequest[] = [];
   await page.addInitScript(() => {
     (window as any).pluginKit = {
@@ -41,7 +41,7 @@ async function setup(page: Page, theme = "light", mode: "pending" | "timeout" = 
     if (path.endsWith("/catalog")) return route.fulfill({ json: { ops, source: "gateway" } });
     if (path.endsWith("/image")) return route.fulfill({ body: svg, contentType: "image/svg+xml" });
     if (path.endsWith("/history")) {
-      let recs = records;
+      let recs = historyRecords;
       const op = url.searchParams.get("op");
       const source = url.searchParams.get("source");
       const starred = url.searchParams.get("starred");
@@ -112,6 +112,31 @@ test("history waits for a late-arriving plugin kit", async ({ page }) => {
 // Criteria 1–3 (shell, empty→Generate→current+History, badge/queue, Apply edit),
 // run in both themes as before.
 for (const theme of ["light", "dark"]) {
+  test(`${theme}: generating from an expired History selection starts a new root`, async ({ page }) => {
+    const expired = { ...records[0], pruned: true };
+    const requests = await setup(page, theme, "pending", catalog, [expired]);
+    await page.getByRole("button", { name: /Pruned .* render/ }).click();
+    await expect(page.getByText("This image expired", { exact: true })).toBeVisible();
+    await expect(page.getByText("star images to keep them", { exact: true })).toBeVisible();
+    await expect(page.getByAltText("Current image")).toHaveCount(0);
+    await prompt(page).fill("A new ceramic vase");
+    const tracking = page.waitForRequest(request => request.url().endsWith("/jobs/job-1") && request.method() === "GET");
+    await page.getByRole("button", { name: "Generate", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("generate");
+    expect(requests[0]).not.toHaveProperty("parent_id");
+    expect(requests[0].params).not.toHaveProperty("image");
+
+    // Editing the new result must still retain its input and lineage.
+    await tracking; // The submit response has arrived and the bus listener is installed.
+    await busDone(page, { job_id: "job-1", media_id: "new-root", elapsed_s: 3 });
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1].op).toBe("edit");
+    expect(requests[1].params.image).toBe("new-root");
+    expect(requests[1].parent_id).toBe("new-root");
+  });
+
   for (const note of ["Research use only", ""]) {
     test(`${theme}: composer preserves catalog non-commercial disclosure (${note || "fallback"})`, async ({ page }) => {
       const ops = catalog.map(entry => ({
@@ -181,6 +206,7 @@ for (const theme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Generate", exact: true }).click();
     await expect.poll(() => requests.length).toBe(1);
     expect(requests[0].op).toBe("generate");
+    expect(requests[0]).not.toHaveProperty("parent_id");
 
     // r3 — render status on the canvas + rendering badge.
     await expect(page.getByText(/Rendering ·/)).toBeVisible();

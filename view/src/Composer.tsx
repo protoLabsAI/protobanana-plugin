@@ -95,7 +95,9 @@ export function Composer({
       params.seed = seed;
     }
     const tier = quality;
-    onSubmit({ op: entry.op, tier, alias: selectedAlias || undefined, params, parent_id: parentId || undefined });
+    // Generation always starts a new root, even with an expired History selection.
+    const parent_id = entry.op === "edit" ? parentId || undefined : undefined;
+    onSubmit({ op: entry.op, tier, alias: selectedAlias || undefined, params, parent_id });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

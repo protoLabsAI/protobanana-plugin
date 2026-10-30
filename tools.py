@@ -460,12 +460,22 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
 
 @tool
 async def inpaint_image(image_ref: str, mask_ref: str, prompt: str, seed: int = -1) -> str:
-    """Edit the transparent region of a source-sized alpha mask.
+    """Repaint exactly the masked area of an image; everything else is kept
+    pixel-for-pixel.
 
-    image_ref and mask_ref accept media ids, /media/ URLs, data URLs or file paths.
-    Transparent mask pixels are edited; opaque pixels are preserved. Opaque
-    black/white masks are unsupported. seed=-1 chooses a random seed.
-    Returns the saved image or a readable error.
+    Needs a mask the same size as the image: either transparent = edit /
+    opaque = keep, or black-and-white with white = edit. You can't draw a
+    mask yourself — if the user can NAME the area ("the sky", "his shirt"),
+    use region_edit instead (it finds the mask from the words). For a
+    freehand area, point the user at the Studio's Inpaint mask painter, or
+    use a mask image they attached.
+
+    Args:
+        image_ref: The image (media id, /media/ URL, data: URL, or path).
+        mask_ref: The mask, same size as the image (same reference forms).
+        prompt: What to paint into the masked area.
+        seed: Fixed seed; -1 = random.
+    Returns markdown with the result and its media id, or a readable error.
     """
     try:
         source = _resolve_image(image_ref)

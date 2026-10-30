@@ -1,6 +1,6 @@
 id: protobanana
 name: protoBanana Images
-version: 0.6.1
+version: 0.7.0
 min_protoagent_version: 0.223.0
 description: >-
   Native image generation and editing via the protoBanana gateway (self-hosted

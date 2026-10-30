@@ -25,7 +25,11 @@ export function Lineage({ records, selected, pending, onSelect }: {
       {pending && <span className="lineage-pending" role="option" aria-selected={false} aria-label="Rendering image"><Spinner /></span>}
     </ThumbnailStrip></ScrollArea>
     {path.map(rec => {
-      const siblings = [...index.values()].filter(r => r.parent_id === rec.parent_id);
+      // Variants are images that SHARE A PARENT. A root has no parent (parent_id
+      // is null/empty), so it has no variants — never treat `null === null` as a
+      // shared parent, or every root in the shared index would fork into every
+      // other unrelated root. Only a real (truthy) parent id groups siblings.
+      const siblings = rec.parent_id ? [...index.values()].filter(r => r.parent_id === rec.parent_id) : [];
       if (siblings.length < 2) return null;
       return <Popover key={rec.media_id} side="top" label={`Variants of ${rec.op}`} trigger={({ toggle, open }) =>
         <Button size="xs" aria-expanded={open} onClick={toggle}>⑂ {siblings.length} variants</Button>}>

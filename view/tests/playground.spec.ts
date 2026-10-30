@@ -1203,6 +1203,17 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+// A forest: two independent root generations plus a real fork under the first
+// root. A root has NO parent, so selecting it must not fork into the unrelated
+// second root; only the shared-parent children count as variants. (Regression
+// guard: `parent_id === null` used to make every root a sibling of every root.)
+const forest: HistoryRecord[] = [
+  { media_id: "root-a", parent_id: null, op: "generate", alias: "protolabs/qwen-image", params: { prompt: "A ceramic vase", seed: 1 }, source: "studio", job_id: null, created: 5, starred: false, pruned: false },
+  { media_id: "root-b", parent_id: null, op: "generate", alias: "protolabs/qwen-image", params: { prompt: "A glass bottle", seed: 2 }, source: "studio", job_id: null, created: 4, starred: false, pruned: false },
+  { media_id: "child-a1", parent_id: "root-a", op: "edit", alias: "protolabs/qwen-image", params: { prompt: "make it bluer", seed: 3, image: "root-a" }, source: "studio", job_id: null, created: 3, starred: false, pruned: false },
+  { media_id: "child-a2", parent_id: "root-a", op: "edit", alias: "protolabs/qwen-image", params: { prompt: "make it greener", seed: 4, image: "root-a" }, source: "studio", job_id: null, created: 2, starred: false, pruned: false },
+];
+
 for (const theme of ["light", "dark"]) {
   test(`${theme}: lineage follows ancestors and a new branch selects its sibling`, async ({ page }) => {
     const history = records.map(r => ({ ...r }));
@@ -1229,6 +1240,32 @@ for (const theme of ["light", "dark"]) {
     await expect(variants.getByRole("option")).toHaveCount(2);
     await variants.getByRole("option").first().click();
     await expect(page.locator(".g-thumb").nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(strip.getByRole("option")).toHaveCount(2);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test(`${theme}: a root has no variants; only a real shared-parent fork forks`, async ({ page }) => {
+    await setup(page, theme, "pending", catalog, forest);
+    const strip = page.getByRole("listbox", { name: "Image lineage" });
+    const forks = page.getByRole("button", { name: /variants/ });
+
+    // Focus the root directly (the shared index resolves it). A root has no
+    // parent, so it must show NO "⑂ variants" — the unrelated second root is not
+    // a sibling. (The pre-fix code listed every null-parent root here.)
+    await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "root-a" }, location.origin));
+    await expect(strip.getByRole("option")).toHaveCount(1);
+    await expect(forks).toHaveCount(0);
+
+    // A child of root-a has one true sibling (child-a2): exactly one fork button,
+    // not one-per-root, and its popover lists the two real variants.
+    await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "child-a1" }, location.origin));
+    await expect(strip.getByRole("option")).toHaveCount(2);
+    await expect(forks).toHaveCount(1);
+    await expect(forks).toHaveText("⑂ 2 variants");
+    await forks.click();
+    const variants = page.getByRole("listbox", { name: "Variants", exact: true });
+    await expect(variants.getByRole("option")).toHaveCount(2);
+    await variants.getByRole("option").nth(1).click();
     await expect(strip.getByRole("option")).toHaveCount(2);
     await expect(page.getByRole("alert")).toHaveCount(0);
   });

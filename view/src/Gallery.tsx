@@ -1,3 +1,4 @@
+import { sendToAgent } from "./api";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -176,6 +177,7 @@ function Tile({
       </figcaption>
 
       <div className="g-actions">
+        <button type="button" className="icon-btn g-send" onClick={() => sendToAgent(rec)}>Send to agent</button>
         <button
           type="button"
           className="icon-btn"

@@ -265,3 +265,101 @@ test("inpaint painter exports source-size alpha and supports undo, erase, invert
     data: { job_id: "job-1", media_id: "leaf", elapsed_s: 1 } }, "*"));
   await expect(page.getByAltText("Current result")).toBeVisible();
 });
+
+test('S5: gallery and current image compose drafts with UTF-8 byte limits', async ({ page }) => {
+  const requests = await setup(page);
+  await page.evaluate(() => {
+    (window as any).drafts = [];
+    window.addEventListener('message', e => {
+      if (e.data?.type === 'protoagent:chat:compose') (window as any).drafts.push(e.data);
+    });
+  });
+  await page.locator('.g-tile').first().getByRole('button', { name: 'Send to agent' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).drafts[0])).toEqual({
+    type: 'protoagent:chat:compose', text: 'Image root (generate, seed 42, prompt "A ceramic vase"): ',
+  });
+  await page.getByRole('button', { name: 'edit · middle', exact: true }).click();
+  await page.locator('.meta-row').getByRole('button', { name: 'Send to agent' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(2);
+  expect(await page.evaluate(() => (window as any).drafts[1].text)).toContain('Image middle (edit, seed 42');
+  const long = await page.evaluate(async () => {
+    const { composeText } = await import(/* @vite-ignore */ String('/src/api.ts'));
+    return composeText({ media_id: 'unicode-image', op: 'generate', params: { seed: 99, prompt: '🍌漢'.repeat(3000) } });
+  });
+  expect(Buffer.byteLength(long)).toBeLessThanOrEqual(4096);
+  expect(long).toContain('Image unicode-image (generate, seed 99, prompt "');
+  expect(long).not.toContain('\ufffd');
+  expect(requests).toHaveLength(0);
+  await expect.poll(() => page.locator('.pane.right').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  mkdirSync('../docs/screenshots/studio-s5', { recursive: true });
+  await page.screenshot({ path: '../docs/screenshots/studio-s5/send-to-agent.png', fullPage: true });
+});
+
+test('S5: inbox delivered during ready focuses history; unknown and spoofed IDs are handled', async ({ page }) => {
+  await setup(page);
+  // Simulate a fresh dock mount whose host drains the inbox on ready.
+  await page.addInitScript(() => {
+    (window as any).pluginKit.initPluginView = () => {
+      window.postMessage({ type: 'protobanana:focus', focus: 'middle' }, location.origin);
+      return {};
+    };
+  });
+  await page.reload();
+  await expect(page.getByText('Current: edit · middle', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
+    data: { type: 'protobanana:focus', focus: 'root' }, origin: location.origin, source: null,
+  })));
+  await expect(page.getByText('Current: edit · middle', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.postMessage({ type: 'protobanana:focus', focus: 'older-image' }, location.origin));
+  await expect(page.getByRole('alert')).toContainText('Image older-image is not in Studio history');
+  await expect(page.locator('.meta-row')).toHaveCount(0);
+  await page.screenshot({ path: '../docs/screenshots/studio-s5/missing-image.png', fullPage: true });
+});
+
+test('S5: reference chip sends nonce-bound openView and falls back on older hosts', async ({ page }) => {
+  await page.goto('/ref.html#pair=fixture');
+  await page.evaluate(() => {
+    (window as any).opens = [];
+    window.addEventListener('message', e => {
+      if (e.data?.type === 'protoComponent:openView') (window as any).opens.push(e.data);
+    });
+    window.postMessage({ type: 'protoComponent:init', nonce: 'nonce-fixture', props: { media_id: 'middle' } }, '*');
+  });
+  await expect(page.getByRole('button', { name: 'Open in Studio' })).toBeEnabled();
+  await page.screenshot({ path: '../docs/screenshots/studio-s5/chip.png' });
+  await page.getByRole('button', { name: 'Open in Studio' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).opens.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).opens[0])).toEqual({
+    type: 'protoComponent:openView', cid: 1, nonce: 'nonce-fixture', view: 'studio',
+    message: { type: 'protobanana:focus', focus: 'middle' },
+  });
+  await expect(page.getByRole('status')).toContainText('This host cannot open Studio from a chip');
+  await expect(page.locator('code')).toHaveText('middle');
+  await page.screenshot({ path: '../docs/screenshots/studio-s5/chip-fallback.png' });
+});
+
+test('S5: real kit module handshake preserves an early inbox message through a fleet prefix', async ({ page }) => {
+  const dataPaths: string[] = [];
+  await page.route('**/_ds/plugin-kit.css', route => route.fulfill({ body: '', contentType: 'text/css' }));
+  await page.route('**/_ds/plugin-kit.js', route => route.fulfill({ contentType: 'text/javascript', body: `
+    export function initPluginView(callback) {
+      window.postMessage({ type: 'protobanana:focus', focus: 'middle' }, location.origin);
+      setTimeout(() => callback({ theme: 'dark' }), 20);
+    }
+    export function apiFetch(path, init) { return fetch('/agents/test' + path, init); }
+    export function apiUrl(path) { return '/agents/test' + path; }
+  ` }));
+  await page.route('**/agents/test/api/plugins/protobanana/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    dataPaths.push(path);
+    if (path.endsWith('/catalog')) return route.fulfill({ json: { ops: catalog } });
+    if (path.endsWith('/history')) return route.fulfill({ json: { records, next_cursor: null } });
+    return route.fulfill({ body: svg, contentType: 'image/svg+xml' });
+  });
+  await page.goto('/agents/test/plugins/protobanana/studio');
+  await expect(page.getByText('Current: edit · middle', { exact: true })).toBeVisible();
+  await expect(page.getByAltText('Current result')).toBeVisible();
+  expect(dataPaths).toContain('/agents/test/api/plugins/protobanana/history');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});

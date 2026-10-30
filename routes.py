@@ -109,6 +109,10 @@ def build_router(registry):
         alias: str | None = None
         operator: str = "default"
 
+    @router.get(f"{_PAGE}/ref.html")
+    async def reference_chip():
+        return FileResponse(view_dir / "ref.html", media_type="text/html")
+
     # ---- gated data routes -------------------------------------------------
     @router.post(f"{_API}/jobs")
     async def create_job(req: JobRequest):  # noqa: ANN202

@@ -10,6 +10,7 @@ import {
   fetchHistoryImage,
   type HistoryRecord,
   ready,
+  sendToAgent,
   submitJob,
   subscribe,
 } from "./api";
@@ -186,6 +187,20 @@ export function App() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [revision, setRevision] = useState(0);
   const sequence = useRef(0);
+  const [focus, setFocus] = useState<{ id: string }>();
+  // Install before ready(): the host drains its inbox during that handshake,
+  // including when opening a previously collapsed/unmounted dock.
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.source !== window.parent || event.origin !== (location.ancestorOrigins?.[0] || location.origin)) return;
+      const message = event.data;
+      if (message?.type !== "protobanana:focus" || typeof message.focus !== "string" ||
+          !/^[A-Za-z0-9_-]{1,200}$/.test(message.focus)) return;
+      setFocus({ id: message.focus });
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, []);
   const reload = useCallback(async () => {
     const all: HistoryRecord[] = [];
     let cursor: number | null = null;
@@ -194,6 +209,7 @@ export function App() {
       all.push(...page.records); cursor = page.next_cursor;
     } while (cursor !== null);
     setRecords(all);
+    return all;
   }, []);
   useEffect(() => {
     let alive = true;
@@ -204,6 +220,18 @@ export function App() {
     return () => { alive = false; };
   }, [reload]);
   useEffect(() => subscribe("protobanana.job.done", () => { reload().catch(e => setError(String(e))); }), [reload]);
+  useEffect(() => {
+    if (!focus) return;
+    let alive = true;
+    ready().then(reload).then(all => {
+      if (!alive) return;
+      const rec = all.find(r => r.media_id === focus.id);
+      setSelected(rec);
+      setResult(undefined);
+      setError(rec ? "" : `Image ${focus.id} is not in Studio history. It may predate the Studio or have expired.`);
+    }).catch(e => { if (alive) setError(`Could not focus image ${focus.id}: ${e}`); });
+    return () => { alive = false; };
+  }, [focus, reload]);
   const entry = catalog?.find(e => e.op === op);
   useEffect(() => {
     if (entry) setParams(Object.fromEntries(Object.entries(entry.params.properties).map(([key, schema]) =>
@@ -242,6 +270,7 @@ export function App() {
       <Compare key={selected?.media_id} current={current} parent={parent} />
       {op === "outpaint" && <MarginCanvas url={outpaint} params={params} set={(k, v) => setParams(p => ({ ...p, [k]: v }))} />}
       {selected && <div className="meta-row"><span>Current: {selected.op} · {selected.media_id}</span>
+        <button type="button" onClick={() => sendToAgent(selected)}>Send to agent</button>
         <button type="button" onClick={() => { setSelected(undefined); setResult(undefined); }}>New root</button>
         {result && <span>done in {result.elapsed}s</span>}
         {current && <a href={current} target="_blank" rel="noreferrer">Open in new tab</a>}</div>}

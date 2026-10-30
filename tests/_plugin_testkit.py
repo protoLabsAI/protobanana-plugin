@@ -29,6 +29,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+import json
 import types
 from pathlib import Path
 
@@ -177,7 +178,9 @@ def _default_stubs() -> dict:
         # Knobs/make_knob_tools are CALLED at register() time, so they're real stand-ins (not
         # raise-when-called); the rest (run_subagent / subagent_types / config / complete) stay
         # raise-unpatched placeholders — patch them in a test that exercises the model seam.
-        "graph.sdk": {"Knobs": _StubKnobs, "make_knob_tools": _make_knob_tools},
+        "graph.sdk": {"Knobs": _StubKnobs, "make_knob_tools": _make_knob_tools,
+                      "encode_component": lambda kind, props: "\x1e[component-v1]" + json.dumps(
+                          {"component": kind, "props": props}, ensure_ascii=False)},
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
         "graph.config_io": {"secrets_yaml_path": lambda: Path("config/secrets.yaml")},
         "graph.goals": {},
@@ -260,6 +263,8 @@ class FakeRegistry:
         self.config = config or {}
         self.config_section = config_section or plugin_id
         self.host = None
+        self.components: dict = {}
+        self.component_frames: dict = {}
         self.tools: list = []
         self.routers: list = []
         self.surfaces: list = []
@@ -283,6 +288,11 @@ class FakeRegistry:
         self.emitted: list = []  # (topic, data)
         self.navigations: list = []
         self.thread_id_resolver = None
+
+    def register_component(self, name, validator, frame=None, reads=None):
+        self.components[name] = validator
+        if frame:
+            self.component_frames[name] = frame
 
     def live_config(self) -> dict:
         """The real registry re-reads host state here; with no host that falls back to

@@ -81,6 +81,50 @@ def test_multipart_and_saved_mask_lineage(plugin, monkeypatch, surface):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("surface", ["tool", "job"])
+def test_config_inpaint_model_routes_both_surfaces(tmp_path, monkeypatch, surface):
+    # The agent tool and the Studio job/catalog must resolve the SAME model, so
+    # overriding `inpaint_model` in config moves both — not just the tool.
+    root = Path(__file__).resolve().parents[1]
+    mod = load_plugin(root, "protobanana")
+    custom = "protolabs/custom-inpaint-xyz"
+    reg = FakeRegistry({"show_model": False, "inpaint_model": custom},
+                       plugin_id="protobanana", plugin_dir=root)
+    mod.register(reg)
+    mod.history.configure(reg, data_dir=tmp_path)
+
+    # The static catalog (Studio's source of truth) also reflects the override.
+    assert mod.catalog_static.alias_for(reg.config, "inpaint", "final") == custom
+
+    source, mask = png(), png(alpha=0)
+    captured = []
+
+    def gateway(request):
+        captured.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(source).decode()}]})
+
+    monkeypatch.setattr(sys.modules["graph.sdk"], "gateway_client",
+                        lambda **kw: httpx.AsyncClient(base_url="https://gateway.test",
+                                                      transport=httpx.MockTransport(gateway)),
+                        raising=False)
+
+    async def scenario():
+        if surface == "tool":
+            result = await mod.tools.inpaint_image.ainvoke(
+                {"image_ref": ref(source), "mask_ref": ref(mask), "prompt": "a flower"})
+            assert "Done" in result
+        else:
+            job = mod.jobs.submit("inpaint", {"image": ref(source), "mask": ref(mask),
+                                             "prompt": "a flower"})
+            await mod.jobs._jobs[job]["_task"]
+            assert mod.jobs.get_state(job)["status"] == "done"
+        content = captured[0].content
+        assert custom.encode() in content
+        assert b"protolabs/qwen-image-inpaint" not in content
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("mask,message", [
     (png(size=(4, 4), alpha=0), "must match source"),
     (png(mode="RGB"), "transparent = edit"),

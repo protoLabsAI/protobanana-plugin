@@ -20,6 +20,12 @@ PNG_1x1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 DATA_URL = "data:image/png;base64," + base64.b64encode(PNG_1x1).decode()
+# PNG_1x1 is half-transparent red, so edit tools flatten it before sending;
+# assertions about bytes passing through untouched use this opaque one.
+PNG_OPAQUE = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+OPAQUE_URL = "data:image/png;base64," + base64.b64encode(PNG_OPAQUE).decode()
 SENTINEL = "\x1e[multimodal-tool-v1]"
 
 
@@ -102,12 +108,12 @@ def test_identity_edit_two_ref_sends_person_field(plugin, monkeypatch):
 
     monkeypatch.setattr(mod.client, "edit", fake_edit)
     out = run(mod.tools.identity_edit.ainvoke({
-        "image_ref": DATA_URL, "prompt": "place her on a beach",
-        "person_ref": DATA_URL, "grounding_px": 1024,
+        "image_ref": OPAQUE_URL, "prompt": "place her on a beach",
+        "person_ref": OPAQUE_URL, "grounding_px": 1024,
     }))
     assert not out.startswith("Error:")
     assert seen["model"] == "protolabs/krea2-identity-edit"
-    assert seen["image"] == PNG_1x1  # image_ref = scene rides the spec image slot
+    assert seen["image"] == PNG_OPAQUE  # image_ref = scene rides the spec image slot
     assert seen["fields"]["person_image"].startswith("data:image/png;base64,")
     assert seen["fields"]["grounding_px"] == 1024
 

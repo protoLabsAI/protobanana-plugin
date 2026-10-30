@@ -125,9 +125,12 @@ def test_gateway_alias_appears_without_a_plugin_change(monkeypatch):
     assert calls == ["/protobanana/catalog"]
 
 
-def test_gateway_entry_merges_over_static(monkeypatch):
-    """A gateway entry for an existing op wins field-by-field over the static
-    one, while static-only ops remain (the static schema is the floor)."""
+def test_gateway_entry_merges_aliases_but_keeps_static_form(monkeypatch):
+    """A gateway entry for a built-in op corrects its aliases tier-by-tier, but
+    the static schema stays the FLOOR for the form. The gateway's extra params
+    (``guidance``) must NOT enter a built-in op's form: jobs._dispatch sends a
+    built-in op through a hard-coded branch with fixed fields, so a form field
+    the branch can't forward would be silently dropped. Static-only ops remain."""
     mod, _ = _load()
     gen = {"op": "generate",
            "aliases": {"final": "protolabs/qwen-image-v2", "draft": TURBO_ALIAS},
@@ -140,10 +143,48 @@ def test_gateway_entry_merges_over_static(monkeypatch):
     out = asyncio.run(mod.catalog.build({}))
 
     g = next(e for e in out["ops"] if e["op"] == "generate")
-    assert g["aliases"]["final"] == "protolabs/qwen-image-v2"  # gateway wins
-    assert g["params"]["properties"]["guidance"]["default"] == 4  # gateway form
+    assert g["aliases"]["final"] == "protolabs/qwen-image-v2"  # gateway alias wins
+    assert g["aliases"]["draft"] == TURBO_ALIAS
+    # The gateway's added param never reaches a built-in op's form — the static
+    # form is preserved intact, so the view shows only fields _dispatch sends.
+    assert "guidance" not in g["params"]["properties"]
+    assert g["params"] == mod.catalog_static.entry({}, "generate")["params"]
     assert any(e["op"] == "compose" for e in out["ops"])  # static-only op kept
     assert len(out["ops"]) == 8
+
+
+def test_builtin_op_renders_through_static_branch_on_gateway_alias(monkeypatch):
+    """The blocking S6 finding, end-to-end: a gateway entry that adds a param to
+    a built-in op must not change how that op renders. ``generate`` keeps its
+    static form and still runs through jobs._dispatch's built-in branch on the
+    gateway-corrected ``final`` alias — nothing the user set is silently dropped."""
+    from test_jobs import PNG_1x1
+
+    mod, _ = _load()
+    gen = {"op": "generate",
+           "aliases": {"final": "live-final", "draft": TURBO_ALIAS},
+           "params": {"type": "object",
+                      "properties": {"prompt": {"type": "string"},
+                                     "guidance": {"type": "number", "default": 4}},
+                      "required": ["prompt"]}}
+    _install_gateway(monkeypatch, {"ops": [gen]}, [])
+    rendered = []
+
+    async def generate(model, prompt, size, **kwargs):
+        rendered.append((model, prompt, kwargs.get("fields")))
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, "generate", generate)
+
+    async def scenario():
+        job_id = mod.jobs.submit("generate", {"prompt": "a fox"})
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        # Built-in branch: rendered on the gateway-corrected alias, no generic
+        # ``fields`` path (the static form carries no extra gateway params).
+        assert rendered == [("live-final", "a fox", None)]
+
+    asyncio.run(scenario())
 
 
 def test_merge_preserves_static_only_alias_tiers(monkeypatch):

@@ -179,15 +179,23 @@ def _normalize_entry(e, warnings: list | None = None) -> dict | None:
 
 
 def _merge_ops(static_ops: list, gateway_ops: list) -> list:
-    """Gateway entries OVER the static ones, keyed by ``op``.
+    """Merge the (already normalized) gateway entries onto the static schema.
 
-    A gateway op merges onto its static counterpart (gateway keys win, so the
-    static entry backstops any field the gateway omits); the ``aliases`` map is
-    merged tier-by-tier, NOT replaced, so a tier the gateway leaves out survives
-    from the static schema. A static-only op is kept (additive — the static
-    schema is the floor); a gateway-only op is appended (a new op/alias the
-    gateway added — acceptance r1). Display order is the static order, with any
-    gateway-only ops after it.
+    The static schema is the FLOOR. For a built-in op the gateway may only
+    correct the ``aliases`` map — merged tier-by-tier, NOT replaced, so a tier
+    the gateway omits (identity's ``realism`` variant, an op's ``draft``)
+    survives from the static schema while the gateway still wins on the tiers it
+    DOES send. The op's form (``params``), route and licence stay static on
+    purpose: jobs._dispatch renders a built-in op through a hard-coded branch
+    with fixed fields, so a gateway-added param (e.g. ``guidance``) would show in
+    the form yet be silently dropped from the render request. Keeping the static
+    form means the view only ever shows fields the built-in branch sends.
+
+    A gateway-only op is appended with its OWN form and runs by its OWN route
+    through jobs._dispatch's generic ``fields`` path, which forwards every
+    catalog param — a new op/alias the gateway added needs no plugin release
+    (acceptance r1). Display order is the static order, with any gateway-only
+    ops after it.
     """
     by_op: dict = {}
     order: list = []
@@ -197,24 +205,22 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
             order.append(e["op"])
     for e in gateway_ops:
         op = e["op"]
-        static_entry = by_op.get(op, {})
-        merged = dict(static_entry)
-        merged.update({k: v for k, v in e.items() if v is not None})
-        # Deep-merge the alias map rather than replace it wholesale: a gateway op
-        # only carries the tiers it knows, so a tier it omits — identity's
-        # ``realism`` variant, an op's ``draft`` — must survive from the static
-        # schema (the gateway still wins on the tiers it DOES send). Without this,
-        # jobs._run's ``aliases.get("realism")`` would miss and silently render
-        # the Realism checkbox on the plain identity model.
-        base_aliases = static_entry.get("aliases")
-        gw_aliases = e.get("aliases")
-        if isinstance(base_aliases, dict) and isinstance(gw_aliases, dict):
-            merged["aliases"] = {**base_aliases,
-                                 **{k: v for k, v in gw_aliases.items() if v}}
-        merged.setdefault("label", op)
-        if op not in by_op:
+        if op in by_op:
+            # Built-in op: static stays the floor; only the alias map merges.
+            static_entry = by_op[op]
+            merged = dict(static_entry)
+            base_aliases = static_entry.get("aliases")
+            gw_aliases = e.get("aliases")
+            if isinstance(base_aliases, dict) and isinstance(gw_aliases, dict):
+                merged["aliases"] = {**base_aliases,
+                                     **{k: v for k, v in gw_aliases.items() if v}}
+            by_op[op] = merged
+        else:
+            # Gateway-only op: append with its own form/route/alias.
+            merged = dict(e)
+            merged.setdefault("label", op)
             order.append(op)
-        by_op[op] = merged
+            by_op[op] = merged
     return [by_op[op] for op in order]
 
 

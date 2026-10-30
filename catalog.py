@@ -29,6 +29,7 @@ merge/validation is pure data, so pytest collects this module with no host.
 
 from __future__ import annotations
 
+import logging
 import time
 
 from . import catalog_static
@@ -49,7 +50,7 @@ _DEFAULT_TIMEOUT_S = 5.0
 # /catalog hit, while still picking up a gateway change within a session.
 _DEFAULT_TTL_S = 60.0
 
-# monotonic timestamp + payload of the last SUCCESSFUL fetch; data None = cold.
+# Monotonic timestamp + normalized payload of the last successful build; None = cold.
 _cache: dict = {"at": 0.0, "data": None}
 
 
@@ -71,13 +72,15 @@ async def fetch_gateway_catalog(cfg: dict) -> dict:
         resp.raise_for_status()
         body = resp.json()
     if isinstance(body, dict) and "ops" not in body and isinstance(body.get("aliases"), list):
-        body = {**body, "ops": _alias_entries(body["aliases"])}
+        warnings = []
+        body = {**body, "ops": _alias_entries(body["aliases"], warnings),
+                "warnings": warnings}
     if not isinstance(body, dict) or not isinstance(body.get("ops"), list):
         raise RuntimeError(f"gateway catalog has no ops list: {str(body)[:200]}")
     return body
 
 
-def _alias_entries(entries: list) -> list:
+def _alias_entries(entries: list, warnings: list | None = None) -> list:
     """Adapt the backend v1 per-alias records to Studio's operation picker.
 
     Keep each alias's own schema and licence, including multiple aliases in the
@@ -87,11 +90,19 @@ def _alias_entries(entries: list) -> list:
     defaults = {}
     names = {"gen": "generate", "bgremove": "remove_background", "multiref": "compose"}
     for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("alias"), str):
+        if not isinstance(entry, dict):
+            _normalize_entry(entry, warnings)
             continue
-        alias = entry["alias"]
+        alias = entry.get("alias")
         op = entry.get("op", "workflow")
-        tier = entry.get("tier") or "final"
+        tier = entry.get("tier", "final")
+        # Validate before using untrusted op/tier values as dictionary keys.
+        candidate = {**entry, "op": op,
+                     "aliases": {tier: alias} if isinstance(tier, str) else None}
+        normalized = _normalize_entry(candidate, warnings)
+        if normalized is None:
+            continue
+        entry = normalized
         studio_op = names.get(op, op)
         if studio_op in catalog_static.OPS:
             defaults.setdefault(studio_op, {}).setdefault(tier, alias)
@@ -111,9 +122,60 @@ async def _live_catalog(cfg: dict) -> dict:
     if data is not None and (time.monotonic() - _cache["at"]) < ttl:
         return data
     body = await fetch_gateway_catalog(cfg)
-    _cache["at"] = time.monotonic()
-    _cache["data"] = body
     return body
+
+
+_ALLOWED_ROUTES = {"/images/generations", "/images/edits", "/chat/completions"}
+
+
+def _normalize_entry(e, warnings: list | None = None) -> dict | None:
+    """Validate gateway data before merging; absent static fields retain their floor."""
+    op = e.get("op") if isinstance(e, dict) else None
+    field = "op"
+    try:
+        if not isinstance(op, str) or not op.strip():
+            raise ValueError
+        result = dict(e)
+        floor = catalog_static.entry({}, op) or {}
+        for field in ("route", "params"):
+            if field not in result and field in floor:
+                result[field] = floor[field]
+        field = "route"
+        route = result.get(field)
+        if not isinstance(route, str) or route not in _ALLOWED_ROUTES:
+            raise ValueError
+        for field in ("label", "tier", "default_tier"):
+            if field in result and not isinstance(result[field], str):
+                raise ValueError
+        field = "aliases"
+        aliases = result.get(field)
+        if not isinstance(aliases, dict) or not all(
+            isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()
+            for k, v in aliases.items()
+        ):
+            raise ValueError
+        field = "params"
+        params = result.get(field)
+        if not isinstance(params, dict):
+            raise ValueError
+        field = "params.properties"
+        properties = params.get("properties")
+        if not isinstance(properties, dict) or not all(
+            isinstance(v, dict) for v in properties.values()
+        ):
+            raise ValueError
+        field = "params.required"
+        required = params.get("required", [])
+        if not isinstance(required, list) or not all(isinstance(v, str) for v in required):
+            raise ValueError
+        result["params"] = {**params, "required": required}
+        return result
+    except Exception:
+        warning = f"Dropped gateway op {op!r}: invalid {field}"
+        logging.getLogger(__name__).warning(warning)
+        if warnings is not None:
+            warnings.append(warning)
+        return None
 
 
 def _merge_ops(static_ops: list, gateway_ops: list) -> list:
@@ -134,8 +196,6 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
             by_op[e["op"]] = e
             order.append(e["op"])
     for e in gateway_ops:
-        if not isinstance(e, dict) or not isinstance(e.get("op"), str) or not e["op"]:
-            continue
         op = e["op"]
         static_entry = by_op.get(op, {})
         merged = dict(static_entry)
@@ -151,17 +211,6 @@ def _merge_ops(static_ops: list, gateway_ops: list) -> list:
         if isinstance(base_aliases, dict) and isinstance(gw_aliases, dict):
             merged["aliases"] = {**base_aliases,
                                  **{k: v for k, v in gw_aliases.items() if v}}
-        schema = merged.get("params")
-        aliases = merged.get("aliases")
-        if (not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict)
-                or not all(isinstance(v, dict) for v in schema["properties"].values())
-                or not isinstance(schema.get("required", []), list)
-                or not isinstance(aliases, dict) or not aliases
-                or not all(isinstance(v, str) and v for v in aliases.values())
-                or merged.get("route") not in {
-                    "/images/generations", "/images/edits", "/chat/completions"}):
-            continue
-        merged["params"] = {**schema, "required": schema.get("required", [])}
         merged.setdefault("label", op)
         if op not in by_op:
             order.append(op)
@@ -221,22 +270,37 @@ async def build(cfg: dict | None = None) -> dict:
     """Assemble the Studio catalog: the gateway catalog merged over the static
     schema, or the static schema alone (``source=static``, ``stale=True``) when
     the gateway can't be reached."""
-    cfg = cfg or {}
-    static_ops = catalog_static.build_catalog(cfg)
+    static_ops = catalog_static.build_catalog({})
     try:
+        cfg = cfg or {}
+        static_ops = catalog_static.build_catalog(cfg)
         gateway = await _live_catalog(cfg)
-    except Exception:
+        cached = gateway is _cache["data"]
+        warnings = list(gateway.get("warnings", []))
+        normalized = []
+        for entry in gateway["ops"]:
+            entry = _normalize_entry(entry, warnings)
+            if entry is not None:
+                normalized.append(entry)
+        gateway = {**gateway, "ops": normalized}
+        result = {
+            "ops": _merge_ops(static_ops, normalized),
+            "source": "gateway",
+            "stale": False,
+            "workflows_hash": gateway.get("workflows_hash"),
+            "warnings": warnings + _alias_warnings(static_ops, _known_aliases(gateway)),
+        }
+        # Never cache a rejected response, even if some entries were usable.
+        if not warnings and not cached:
+            _cache.update(at=time.monotonic(), data={"ops": normalized,
+                                                  "aliases": sorted(_known_aliases(gateway)),
+                                                  "workflows_hash": gateway.get("workflows_hash")})
+        return result
+    except Exception as exc:
         return {
             "ops": static_ops,
             "source": "static",
             "stale": True,
             "workflows_hash": None,
-            "warnings": [],
+            "warnings": [f"Gateway catalog unavailable: {exc}"],
         }
-    return {
-        "ops": _merge_ops(static_ops, gateway.get("ops") or []),
-        "source": "gateway",
-        "stale": False,
-        "workflows_hash": gateway.get("workflows_hash"),
-        "warnings": _alias_warnings(static_ops, _known_aliases(gateway)),
-    }

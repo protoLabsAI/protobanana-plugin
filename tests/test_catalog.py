@@ -13,6 +13,8 @@ TTL cache, and the ``workflows_hash`` S7 keys its cache on.
 
 import asyncio
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -200,7 +202,8 @@ def test_unreachable_falls_back_to_static_stale(monkeypatch):
     out = asyncio.run(mod.catalog.build({}))
 
     assert out["source"] == "static" and out["stale"] is True
-    assert out["workflows_hash"] is None and out["warnings"] == []
+    assert out["workflows_hash"] is None
+    assert "gateway unreachable" in out["warnings"][0]
     assert out["ops"] == mod.catalog_static.build_catalog({})
     assert len(out["ops"]) == 8
 
@@ -549,3 +552,161 @@ def test_backend_v1_updates_builtin_alias_defaults(monkeypatch):
     gen = next(e for e in result['ops'] if e['op'] == 'generate')
     assert gen['aliases'] == {'draft': TURBO_ALIAS, 'final': 'live-final'}
     assert any(DRIFT_ALIAS in warning for warning in result['warnings'])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("route", []), ("route", "/unknown"), ("op", {}), ("op", ""),
+    ("aliases", {"final": 42}), ("aliases", []), ("aliases", {"": "alias"}),
+    ("params", []), ("params.properties", {"scale": None}),
+    ("params.required", {}), ("params.required", [42]),
+    ("label", 42), ("tier", []),
+    *[(field, None) for field in ("op", "route", "aliases", "params",
+                                "params.properties", "params.required", "label", "tier")],
+])
+def test_malformed_entries_are_dropped_before_merge(monkeypatch, field, value):
+    mod, reg = _load()
+    bad = _upscale_op()
+    bad["op"] = "broken"
+    if "." in field:
+        parent, key = field.split(".")
+        bad[parent][key] = value
+    else:
+        bad[field] = value
+    _install_gateway(monkeypatch, {"ops": [bad, _upscale_op()]}, [])
+    merge = mod.catalog._merge_ops
+
+    def checked_merge(static, entries):
+        assert [e["op"] for e in entries] == ["upscale"]
+        return merge(static, entries)
+
+    monkeypatch.setattr(mod.catalog, "_merge_ops", checked_merge)
+
+    async def scenario():
+        async with await _client(_app(reg)) as ac:
+            response = await ac.get("/api/plugins/protobanana/catalog")
+            assert response.status_code == 200
+            result = response.json()
+        assert result["source"] == "gateway"
+        assert len(result["ops"]) == 9
+        warnings = [w for w in result["warnings"] if "Dropped gateway op" in w]
+        assert len(warnings) == 1
+        assert field in warnings[0] and repr(bad["op"]) in warnings[0]
+        assert mod.catalog._cache["data"] is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("entry", [None, {}, {"op": "generate"}])
+def test_missing_aliases_and_null_entries_are_rejected(monkeypatch, entry):
+    mod, _ = _load()
+    _install_gateway(monkeypatch, {"ops": [entry, _upscale_op()]}, [])
+    result = asyncio.run(mod.catalog.build({}))
+    assert len(result["ops"]) == 9
+    assert any("Dropped gateway op" in w for w in result["warnings"])
+    assert mod.catalog._cache["data"] is None
+
+
+@pytest.mark.parametrize("op,tier", [("identity", "realism"), ("generate", "draft")])
+def test_partial_tier_preserves_static_alias(monkeypatch, op, tier):
+    mod, _ = _load()
+    _install_gateway(monkeypatch, {"ops": [{"op": op, "aliases": {"final": "live"}}]}, [])
+    result = asyncio.run(mod.catalog.build({}))
+    entry = next(e for e in result["ops"] if e["op"] == op)
+    assert entry["aliases"]["final"] == "live"
+    assert entry["aliases"][tier] == mod.catalog_static.entry({}, op)["aliases"][tier]
+
+
+@pytest.mark.parametrize("failure", ["_merge_ops", "_alias_warnings"])
+def test_build_failure_returns_static_and_route_never_500(monkeypatch, failure):
+    mod, reg = _load()
+    _install_gateway(monkeypatch, {"ops": [_upscale_op()]}, [])
+
+    def boom(*args):
+        raise RuntimeError("catalog processing failed")
+
+    monkeypatch.setattr(mod.catalog, failure, boom)
+
+    async def scenario():
+        result = await mod.catalog.build({})
+        assert result["source"] == "static" and result["stale"] is True
+        assert result["ops"] == mod.catalog_static.build_catalog({})
+        assert "catalog processing failed" in result["warnings"][0]
+        assert mod.catalog._cache["data"] is None
+        async with await _client(_app(reg)) as ac:
+            response = await ac.get("/api/plugins/protobanana/catalog")
+            assert response.status_code == 200
+            assert response.json() == result
+        # The gateway-only operation is absent from the fallback; fail terminally.
+        job_id = mod.jobs.submit("upscale", {})
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "failed"
+        assert [topic for topic, _ in reg.emitted] == ["protobanana.job.failed"]
+
+    asyncio.run(scenario())
+
+
+def test_unexpected_build_exception_fails_job(monkeypatch):
+    mod, reg = _load()
+
+    async def boom(*args):
+        raise RuntimeError("unexpected build failure")
+
+    monkeypatch.setattr(mod.catalog, "build", boom)
+
+    async def scenario():
+        job_id = mod.jobs.submit("generate", {"prompt": "fox"})
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "failed"
+        assert [topic for topic, _ in reg.emitted] == ["protobanana.job.failed"]
+        assert "unexpected build failure" in reg.emitted[0][1]["error"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("payload", [None, {"ops": None}, {"ops": [{"op": "bad"}]}])
+def test_bad_payload_is_not_cached(monkeypatch, payload):
+    mod, _ = _load()
+    calls = []
+    _install_gateway(monkeypatch, payload, calls)
+    asyncio.run(mod.catalog.build({}))
+    assert mod.catalog._cache["data"] is None
+    _install_gateway(monkeypatch, {"ops": [_upscale_op()]}, calls)
+    result = asyncio.run(mod.catalog.build({}))
+    assert len(calls) == 2
+    assert any(e["op"] == "upscale" for e in result["ops"])
+    assert mod.catalog._cache["data"]["ops"] == [_upscale_op()]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("op", {}), ("route", []), ("alias", None), ("tier", []),
+    ("params", None), ("label", None),
+])
+def test_bad_per_alias_record_does_not_hide_valid_records(monkeypatch, field, value):
+    mod, _ = _load()
+    good = {**_upscale_op(), "alias": "upscale-live", "tier": "final"}
+    bad = {**good, field: value}
+    _install_gateway(monkeypatch, {"aliases": [bad, good]}, [])
+    result = asyncio.run(mod.catalog.build({}))
+    assert result["source"] == "gateway"
+    assert any(e["op"] == "upscale:upscale-live" for e in result["ops"])
+    warnings = [w for w in result["warnings"] if "Dropped gateway op" in w]
+    assert len(warnings) == 1 and field in warnings[0]
+    assert mod.catalog._cache["data"] is None
+
+
+def test_cache_stores_normalized_ops_and_expires(monkeypatch):
+    mod, _ = _load()
+    entry = {**_upscale_op(), "alias": "upscale-live", "tier": "final"}
+    del entry["params"]["required"]
+    calls = []
+    now = [100.0]
+    monkeypatch.setattr(mod.catalog.time, "monotonic", lambda: now[0])
+    _install_gateway(monkeypatch, {"aliases": [entry]}, calls)
+    first = asyncio.run(mod.catalog.build({}))
+    cached = mod.catalog._cache["data"]
+    assert cached["ops"][0]["params"]["required"] == []
+    assert cached["aliases"] == ["upscale-live"]
+    now[0] += 61
+    assert asyncio.run(mod.catalog.build({})) == first
+    assert asyncio.run(mod.catalog.build({})) == first
+    assert len(calls) == 2

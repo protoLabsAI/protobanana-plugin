@@ -190,17 +190,18 @@ async def _run(job_id: str) -> None:
         st["status"] = "running"
         st["queue_position"] = 0
         started = time.monotonic()
-        # Resolve in the background so even a cold catalog cannot delay POST /jobs.
-        snapshot = await catalog.build(_cfg)
-        entry = next((e for e in snapshot["ops"] if e["op"] == st["op"]), None)
-        st["_catalog_entry"] = entry
-        if entry and not st["_override"]:
-            tier = "realism" if st["op"] == "identity" and st["params"].get("realism") else st["tier"]
-            st["alias"] = entry["aliases"].get(tier) or entry["aliases"].get("final")
         attempts = 0
         while True:
             attempts += 1
             try:
+                if attempts == 1:
+                    # Resolve in the background so even a cold catalog cannot delay POST /jobs.
+                    snapshot = await catalog.build(_cfg)
+                    entry = next((e for e in snapshot["ops"] if e["op"] == st["op"]), None)
+                    st["_catalog_entry"] = entry
+                    if entry and not st["_override"]:
+                        tier = "realism" if st["op"] == "identity" and st["params"].get("realism") else st["tier"]
+                        st["alias"] = entry["aliases"].get(tier) or entry["aliases"].get("final")
                 # The gateway call AND the persist both live inside the try: if
                 # save_media raises, the task must still mark the job failed and
                 # publish job.failed, or the Studio view waits forever.

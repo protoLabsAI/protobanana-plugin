@@ -183,7 +183,10 @@ def test_s6_catalog_banner_and_warnings_are_built():
     assert "catalogSource" in app and "warnings" in app
     for field in ("source", "stale", "warnings"):
         assert field in api, f"api.ts Catalog payload drops {field!r}"
-    for needle in ("built-in schema", "banner-stale", "banner-warn"):
+    # The static-fallback banner shows one plain sentence; the raw gateway error
+    # (an httpx exception, often with a URL) is tucked behind a Details disclosure
+    # (banner-details) rather than printed inline (fix round: finding a).
+    for needle in ("built-in list", "banner-stale", "banner-warn", "banner-line", "banner-details"):
         assert needle in app, f"S6 banner needle {needle!r} vanished from App.tsx"
         assert needle in js, f"stale dist/: {needle!r} missing from the built bundle — rebuild view/"
 

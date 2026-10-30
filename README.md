@@ -73,6 +73,10 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 
 ## Versions
 
+- **0.7.0** — `image-capabilities` skill: the agent can explain what it can do with
+  images (operations, models, timings, limits, masks, Studio) and pick the right tool.
+  `inpaint_image` accepts black/white masks (white = edit) as the gateway does.
+  `compose_images` takes 2–10 references.
 - **0.6.0** — protoBanana Studio Playground (Studio S1–S5): a background **job** API and
   completion events, the Studio console view with a shared history/gallery, a Playground
   running all single-image ops, mask painting with `inpaint_image`, and **Send to agent**

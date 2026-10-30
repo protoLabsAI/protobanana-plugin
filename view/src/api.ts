@@ -216,11 +216,30 @@ export interface JobRequest {
   operator?: string;
 }
 
-export async function fetchCatalog(): Promise<CatalogEntry[]> {
+/** The /catalog payload (Studio S6): the op list the forms are built from, plus
+ *  the provenance the view surfaces — `source` ("gateway" live vs "static"
+ *  built-in fallback), `stale` (gateway unreachable → static banner),
+ *  `workflows_hash` (S7 keys its step cache on it), and `warnings` (a configured
+ *  alias the gateway doesn't know — the Settings hint, design R5). */
+export interface Catalog {
+  ops: CatalogEntry[];
+  source: "gateway" | "static" | string;
+  stale: boolean;
+  workflows_hash: string | null;
+  warnings: string[];
+}
+
+export async function fetchCatalog(): Promise<Catalog> {
   const r = await apiFetch("catalog");
   if (!r.ok) throw new Error(`catalog ${r.status}`);
-  const body = (await r.json()) as { ops?: CatalogEntry[] };
-  return body.ops || [];
+  const body = (await r.json()) as Partial<Catalog>;
+  return {
+    ops: body.ops || [],
+    source: body.source || "static",
+    stale: Boolean(body.stale),
+    workflows_hash: body.workflows_hash ?? null,
+    warnings: body.warnings || [],
+  };
 }
 
 /** POST /jobs — returns the job_id without awaiting the render (design R1). */

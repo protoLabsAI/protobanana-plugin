@@ -147,6 +147,23 @@ def test_committed_build_is_fresh_against_source():
     assert (DIST / entry.group(1).lstrip("./")).is_file()
 
 
+def test_s6_catalog_banner_and_warnings_are_built():
+    """Studio S6: the static-source banner and the alias-drift Settings hint are
+    wired in the view source AND survive into the committed bundle — so a stale
+    dist/ can't silently drop the fallback banner (acceptance r2) or the warnings
+    (r3). Keyed on string literals, which outlast Vite's minification."""
+    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+    api = (SRC / "api.ts").read_text(encoding="utf-8")
+    js = "\n".join(p.read_text(encoding="utf-8") for p in (DIST / "assets").glob("*.js"))
+    # the banner is driven by the catalog source + the warnings list
+    assert "catalogSource" in app and "warnings" in app
+    for field in ("source", "stale", "warnings"):
+        assert field in api, f"api.ts Catalog payload drops {field!r}"
+    for needle in ("built-in schema", "banner-stale", "banner-warn"):
+        assert needle in app, f"S6 banner needle {needle!r} vanished from App.tsx"
+        assert needle in js, f"stale dist/: {needle!r} missing from the built bundle — rebuild view/"
+
+
 def test_reference_chip_is_built_and_uses_the_nonce_bound_bridge():
     chip = (DIST / "ref.html").read_text()
     assert chip == (VIEW / "public" / "ref.html").read_text()

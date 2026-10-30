@@ -231,7 +231,7 @@ async def _run(job_id: str) -> None:
 async def _dispatch(st: dict) -> bytes:
     """Run one gateway call for the op — the SAME client.py functions the tools
     use. Returns the rendered PNG bytes."""
-    from . import tools
+    from . import imaging, tools
     op = st["op"]
     params = st["params"]
     alias = st["alias"]
@@ -240,6 +240,8 @@ async def _dispatch(st: dict) -> bytes:
     seed = _seed(params.get("seed"))
 
     if op == "generate":
+        if params.get("n", 1) != 1:
+            raise ValueError("Studio supports one image per job (n must be 1).")
         # Snap to the 16px grid and clamp to 256–2048 (accepting ×/* separators)
         # exactly as tools.generate_image does, so the gateway gets a size it can
         # honour instead of guessing one from the prompt (client.py comment).
@@ -247,18 +249,23 @@ async def _dispatch(st: dict) -> bytes:
         return await client.generate(alias, params.get("prompt", ""), f"{w}x{h}", seed=seed,
                                      negative_prompt=params.get("negative_prompt") or None)
     if op == "remove_background":
-        return await client.edit(alias, "remove background", _image(params["image"]))
+        prep = imaging.prepare(tools._resolve_image(params["image"]))
+        raw = await client.edit(alias, "remove background", prep.data)
+        return imaging.defringe(raw, prep.data)
     if op == "compose":
         refs = [r for r in (params.get("images") or params.get("image_refs") or []) if str(r).strip()]
         return await client.chat_compose(alias, params.get("prompt", ""),
                                          [_image(r) for r in refs])
 
     # Remaining ops ride /images/edits with op-specific form fields.
-    image = _image(params["image"])
+    prep = imaging.prepare(tools._resolve_image(params["image"]))
+    image = prep.data
     if op == "edit":
-        return await client.edit(alias, params.get("prompt", ""), image,
-                                 fields={"seed": seed,
+        raw = await client.edit(alias, params.get("prompt", ""), image,
+                                fields={"seed": seed,
                                          "negative_prompt": params.get("negative_prompt") or None})
+        return imaging.finish_edit(raw, prep,
+                                   keep_transparency=params.get("keep_transparency", True))
     if op == "inpaint":
         # The mask's transparency IS the signal (transparent = the region to
         # edit), so it must NOT go through _image()/imaging.prepare, which
@@ -269,16 +276,19 @@ async def _dispatch(st: dict) -> bytes:
                                          "negative_prompt": params.get("negative_prompt") or None},
                                  mask=_mask(params["mask"]))
     if op == "region_edit":
-        return await client.edit(alias, params.get("prompt", ""), image,
-                                 fields={"grounding": params.get("grounding") or params.get("region"),
+        raw = await client.edit(alias, params.get("prompt", ""), image,
+                                fields={"grounding": params.get("grounding") or params.get("region"),
                                          "seed": seed})
+        return imaging.finish_edit(raw, prep,
+                                   keep_transparency=params.get("keep_transparency", True))
     if op == "identity":
         fields: dict = {"seed": seed}
         if params.get("grounding_px"):
             fields["grounding_px"] = params["grounding_px"]
         if params.get("person_image"):
             fields["person_image"] = _person_data_url(params["person_image"])
-        return await client.edit(alias, params.get("prompt", ""), image, fields=fields)
+        raw = await client.edit(alias, params.get("prompt", ""), image, fields=fields)
+        return imaging.finish_edit(raw, prep)
     if op == "outpaint":
         margins = {k: int(params.get(k) or 0) for k in ("left", "top", "right", "bottom")}
         return await client.edit(alias, params.get("prompt") or "extend the scene", image,

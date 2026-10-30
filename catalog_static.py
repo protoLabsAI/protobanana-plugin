@@ -59,6 +59,8 @@ _PROMPT = {"type": "string", "title": "Prompt"}
 _NEGATIVE = {"type": "string", "title": "Negative prompt", "default": ""}
 _SEED = {"type": "integer", "title": "Seed", "default": -1,
          "description": "Fixed seed for reproducibility; -1 = random."}
+_KEEP_TRANSPARENCY = {"type": "boolean", "title": "Keep transparency", "default": True,
+                      "description": "Preserve the input silhouette; disable to fill the backdrop."}
 _SIZE = {"type": "string", "title": "Size", "default": "1024x1024",
          "pattern": r"^\d+\s*[x×*]\s*\d+$",
          "description": f"WxH, snapped to a multiple of {_SIZE_STEP} within "
@@ -78,12 +80,15 @@ _PARAMS: dict[str, dict] = {
         "negative_prompt": _NEGATIVE,
         "size": _SIZE,
         "seed": _SEED,
-        "n": {"type": "integer", "title": "Count", "default": 1, "minimum": 1, "maximum": 4},
+        "n": {"type": "integer", "title": "Count", "default": 1, "const": 1,
+              "minimum": 1, "maximum": 1,
+              "description": "One image per job; batch generation is not supported."},
     }, ["prompt"]),
     "edit": _schema({
         "image": {"type": "string", "title": "Image", "description": "Image reference to edit."},
         "prompt": _PROMPT,
         "negative_prompt": _NEGATIVE,
+        "keep_transparency": _KEEP_TRANSPARENCY,
         "seed": _SEED,
     }, ["image", "prompt"]),
     "inpaint": _schema({
@@ -100,6 +105,7 @@ _PARAMS: dict[str, dict] = {
                       "description": "Short noun phrase for the region (SAM 3 → mask), "
                                      "e.g. \"the red car\"."},
         "prompt": _PROMPT,
+        "keep_transparency": _KEEP_TRANSPARENCY,
         "seed": _SEED,
     }, ["image", "grounding", "prompt"]),
     "identity": _schema({

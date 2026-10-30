@@ -612,3 +612,111 @@ def test_studio_page_serves_index_html(plugin):
             assert "/_ds/plugin-kit.js" in r.text
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("op", ["edit", "region_edit", "identity"])
+@pytest.mark.parametrize("keep_transparency", [None, True, False])
+def test_studio_edit_restores_size_and_expected_alpha(plugin, monkeypatch, op, keep_transparency):
+    import io
+
+    from PIL import Image
+
+    mod, reg = plugin
+
+    async def fake_edit(model, prompt, image, **kw):
+        sent = Image.open(io.BytesIO(image))
+        assert sent.mode == "RGB"
+        assert sent.getpixel((3, 3)) == (255, 255, 255)
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (0, 0, 255)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+
+    async def scenario():
+        params = {"image": _data_url(_transparent_png()), "prompt": "blue",
+                  "grounding": "subject"}
+        if keep_transparency is not None:
+            params["keep_transparency"] = keep_transparency
+        job_id = mod.jobs.submit(op, params)
+        await _task(mod, job_id)
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        result = Image.open(io.BytesIO(reg.saved_media[-1][0]))
+        assert result.size == (4, 4)
+        if op != "identity" and keep_transparency is not False:
+            assert result.mode == "RGBA"
+            assert result.getpixel((3, 3))[3] == 0
+            assert result.getpixel((0, 0))[3] == 255
+        else:
+            assert result.mode == "RGB"
+        assert reg.emitted[-1][0] == "protobanana.job.done"
+
+    asyncio.run(scenario())
+
+
+def test_studio_remove_background_defringes_saved_cutout(plugin, monkeypatch):
+    import io
+
+    from PIL import Image, ImageDraw
+
+    mod, reg = plugin
+
+    def png(image):
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    source = Image.new("RGB", (96, 96), (252, 252, 252))
+    draw = ImageDraw.Draw(source)
+    draw.ellipse((18, 18, 77, 77), fill=(180, 225, 245))
+    draw.ellipse((21, 21, 74, 74), fill=(60, 170, 220))
+    mask = Image.new("L", source.size, 0)
+    ImageDraw.Draw(mask).ellipse((18, 18, 77, 77), fill=255)
+    cutout = source.copy()
+    cutout.putalpha(mask)
+
+    async def fake_edit(model, prompt, image, **kw):
+        assert image == png(source)
+        return png(cutout)
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+
+    async def scenario():
+        job_id = mod.jobs.submit("remove_background", {"image": _data_url(png(source))})
+        await _task(mod, job_id)
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        result = Image.open(io.BytesIO(reg.saved_media[-1][0]))
+        assert result.getpixel((19, 48))[3] < 200
+        assert result.getpixel((48, 48)) == cutout.getpixel((48, 48))
+        assert result.getpixel((2, 2))[3] == 0
+
+    asyncio.run(scenario())
+
+
+def test_generate_count_matches_single_image_contract(plugin, monkeypatch):
+    mod, reg = plugin
+    count = mod.catalog_static.entry({}, "generate")["params"]["properties"]["n"]
+    assert count["const"] == count["minimum"] == count["maximum"] == count["default"] == 1
+    calls = []
+
+    async def fake_generate(*args, **kwargs):
+        calls.append(args)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.client, "generate", fake_generate)
+
+    async def scenario():
+        job_id = mod.jobs.submit("generate", {"prompt": "fox", "n": 2})
+        await _task(mod, job_id)
+        state = mod.jobs.get_state(job_id)
+        assert state["status"] == "failed"
+        assert "n must be 1" in state["error"]
+        assert not calls and not reg.saved_media
+        assert reg.emitted[-1][0] == "protobanana.job.failed"
+
+        job_id = mod.jobs.submit("generate", {"prompt": "fox", "n": 1})
+        await _task(mod, job_id)
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        assert len(calls) == len(reg.saved_media) == 1
+
+    asyncio.run(scenario())

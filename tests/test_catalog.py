@@ -784,3 +784,70 @@ def test_cache_stores_normalized_ops_and_expires(monkeypatch):
     assert asyncio.run(mod.catalog.build({})) == first
     assert asyncio.run(mod.catalog.build({})) == first
     assert len(calls) == 2
+
+
+# ------------------------------------------- gateway-primary jobs resolution
+#
+# Operator authority decision (2026-10-30): the merged snapshot from
+# catalog.build() is the ONE source of truth. jobs.submit / _run resolve the
+# alias and validate the op through it; catalog_static is only the floor build()
+# falls back to when the gateway is down. These pin that jobs.py no longer
+# resolves or validates through catalog_static directly.
+
+
+def test_submit_defers_alias_resolution_to_the_snapshot(monkeypatch):
+    """A built-in submit with no override carries NO resolved alias while queued —
+    submit does not touch catalog_static. The alias fills in from the gateway
+    snapshot only once _run reads it, so the gateway's alias is what renders."""
+    from test_jobs import PNG_1x1
+
+    mod, _ = _load()
+    _install_gateway(monkeypatch, {"ops": [
+        {"op": "generate", "aliases": {"final": "live-final", "draft": TURBO_ALIAS}}]}, [])
+    rendered = []
+
+    async def generate(model, *a, **kw):
+        rendered.append(model)
+        return PNG_1x1
+
+    monkeypatch.setattr(mod.jobs.client, "generate", generate)
+
+    async def scenario():
+        job_id = mod.jobs.submit("generate", {"prompt": "a fox"})
+        # Not resolved via the static catalog at submit time (no cfg default
+        # leaks through); the snapshot resolves it when the job starts.
+        assert mod.jobs.get_state(job_id)["alias"] is None
+        await mod.jobs._jobs[job_id]["_task"]
+        assert mod.jobs.get_state(job_id)["status"] == "done"
+        assert mod.jobs.get_state(job_id)["alias"] == "live-final"
+        assert rendered == ["live-final"]
+
+    asyncio.run(scenario())
+
+
+def test_op_absent_from_a_reachable_catalog_fails_the_job(monkeypatch):
+    """_run validates the op through the snapshot: an op the (reachable) gateway
+    catalog doesn't carry is rejected with a terminal job.failed, never left
+    wedged in 'running'."""
+    mod, reg = _load()
+    _install_gateway(monkeypatch, {"ops": [_upscale_op()]}, [])  # healthy, but no "ghost"
+
+    async def scenario():
+        job_id = mod.jobs.submit("ghost", {})
+        await mod.jobs._jobs[job_id]["_task"]
+        st = mod.jobs.get_state(job_id)
+        assert st["status"] == "failed"
+        assert "not in the catalog" in st["error"]
+        assert [t for t, _ in reg.emitted] == ["protobanana.job.failed"]
+
+    asyncio.run(scenario())
+
+
+def test_jobs_resolves_through_snapshot_not_catalog_static():
+    """Gateway-primary architecture guard: jobs.py builds the merged snapshot and
+    resolves/validates through it — it no longer calls catalog_static.alias_for
+    or catalog_static.entry (the static calls the operator decision removed)."""
+    src = (PLUGIN_ROOT / "jobs.py").read_text(encoding="utf-8")
+    assert "catalog.build(" in src
+    assert "catalog_static.alias_for" not in src
+    assert "catalog_static.entry" not in src

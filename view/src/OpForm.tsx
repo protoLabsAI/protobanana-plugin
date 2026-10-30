@@ -6,12 +6,20 @@ import { useRef } from "react";
 // free-text "media reference" input and the alias/seed remnants no longer exist.
 // What survives is MarginCanvas: the outpaint margin stage, reused on the canvas
 // in outpaint mode with the composer's numeric margins as the WCAG 2.5.7
-// dragging alternative (§4.3 / §10).
+// dragging alternative (§4.3 / §10). It is centred in the zoom stage, which
+// applies the fit/zoom transform around it so the margin preview scales (§7).
 
-export function MarginCanvas({ url, params, set }: { url?: string; params: Record<string, unknown>; set: (k: string, v: unknown) => void }) {
+export function MarginCanvas({ url, params, set, onNatural }: {
+  url?: string;
+  params: Record<string, unknown>;
+  set: (k: string, v: unknown) => void;
+  onNatural?: (iw: number, ih: number) => void;
+}) {
   const drag = useRef<{ edge: string; start: number; value: number; scale: number }>();
   return <div className="margin-canvas" aria-label="Outpaint margins">
-    {url ? <img src={url} alt="Outpaint source" draggable={false} /> : <p>Choose an image to extend its canvas.</p>}
+    {url ? <img src={url} alt="Outpaint source" draggable={false}
+      onLoad={e => onNatural?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
+      : <p>Choose an image to extend its canvas.</p>}
     {(["left", "top", "right", "bottom"] as const).map(edge => <button key={edge} type="button"
       className={`margin-handle ${edge}`} aria-label={`Drag ${edge} margin`} title={`Drag ${edge} margin; arrow keys adjust by 16px`}
       onKeyDown={e => { if (e.key.startsWith("Arrow")) { e.preventDefault(); set(edge, Math.max(0, Number(params[edge] || 0) + (["ArrowUp", "ArrowRight"].includes(e.key) ? 16 : -16))); } }}

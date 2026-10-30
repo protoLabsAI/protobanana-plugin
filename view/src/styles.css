@@ -1075,6 +1075,31 @@ body {
   overflow: auto;
 }
 
+/* Lightbox (fullscreen image from the view toolbar, §7) */
+.pbx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--overlay);
+}
+
+.pbx-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: 0 16px 48px var(--overlay);
+}
+
+.pbx-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
 /* ---- container-query responsiveness (the view's own width, §8) ---------- */
 
 @container (max-width: 779px) {
@@ -1359,37 +1384,107 @@ body {
   color: var(--muted);
 }
 
-/* ---- mask + margin modes on the canvas ---------------------------------- */
+/* ---- canvas zoom + pan (design §7, hand-built until #642 ImageViewport) --- */
 
-.mask-editor,
-.margin-canvas {
-  max-width: 100%;
+/* The zoom viewport fills the stage content box (inside the 1px border), clips
+ * at every zoom so the stage never grows scrollbars, and is focusable for the
+ * +/-/0/1/arrow keyboard controls. */
+.stage-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  outline: none;
+  touch-action: none;
 }
 
-.mask-editor {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 12px;
+.stage-viewport.is-pannable {
+  cursor: grab;
+}
+
+.stage-viewport.is-pannable:active {
+  cursor: grabbing;
+}
+
+/* Floating view toolbar, top-right of the stage; raised, token-only. */
+.view-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-raised);
+  box-shadow: 0 4px 16px var(--overlay);
 }
 
-.mask-editor legend {
+.view-zoom-pct {
+  min-width: 46px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.view-zoom-pct:hover {
+  background: var(--bg-hover);
+}
+
+/* ---- mask + margin modes on the canvas ---------------------------------- */
+
+/* The Konva mask stage fills the viewport; its Layer carries the fit+zoom
+ * transform so a stroke maps to source pixels (MaskEditor). */
+.mask-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Compact floating paint-tools panel, top-left so it clears the view toolbar
+ * (top-right) and the render overlay (bottom-centre). */
+.mask-tools {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  max-width: 236px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: 0 4px 16px var(--overlay);
+}
+
+.mask-tools legend {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   padding: 0 4px;
 }
 
-.mask-editor .slot-actions {
+.mask-tools .hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mask-tools .slot-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.mask-editor .slot-actions button {
+.mask-tools .slot-actions button {
   padding: 4px 9px;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 3px);
@@ -1399,19 +1494,19 @@ body {
   cursor: pointer;
 }
 
-.mask-editor .slot-actions button[aria-pressed="true"] {
+.mask-tools .slot-actions button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.mask-editor label {
+.mask-tools label {
   display: grid;
   gap: 2px;
   font-size: 11px;
   color: var(--muted);
 }
 
-.mask-editor kbd {
+.mask-tools kbd {
   padding: 0 4px;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
@@ -1419,13 +1514,15 @@ body {
   font-size: 10px;
 }
 
-/* The painted region reads as accent at 35% (set on the Konva layer); this
- * outline is the non-colour cue so the mask never relies on colour alone (§10). */
-.mask-canvas {
-  justify-self: center;
-  outline: 2px dashed var(--accent);
-  outline-offset: 3px;
-  border-radius: 2px;
+/* The outpaint preview keeps its own size (handles stay inside the stage) and is
+ * centred in the viewport; the zoom stage scales the whole group about its centre
+ * so the margin preview scales with zoom (§7). */
+.stage-outpaint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .margin-canvas {

@@ -562,6 +562,52 @@ export function Drawer({
   );
 }
 
+// ------------------------------------------------------------------- Lightbox
+
+// Fullscreen image overlay for the view toolbar's Fullscreen control (design §7).
+// Local stand-in until #642 ImageViewport; Esc or a backdrop click closes it, and
+// the image is shown whole (object-fit:contain) regardless of the stage zoom.
+export function Lightbox({
+  open,
+  src,
+  alt,
+  onClose,
+}: {
+  open: boolean;
+  src?: string;
+  alt?: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="pbx-lightbox" role="dialog" aria-modal="true" aria-label="Fullscreen image" onMouseDown={onClose}>
+      <Button
+        icon
+        size="sm"
+        className="pbx-lightbox-close"
+        aria-label="Close fullscreen"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={onClose}
+      >
+        <CloseIcon />
+      </Button>
+      {src && <img className="pbx-lightbox-img" src={src} alt={alt || "Fullscreen image"} onMouseDown={(e) => e.stopPropagation()} />}
+    </div>
+  );
+}
+
 // -------------------------------------------------------------------- Tooltip
 
 // A supplemental hover/focus tooltip (design §10 "every icon button has a name
@@ -817,6 +863,50 @@ export const MoreIcon = () => (
     <circle cx="5" cy="12" r="1.3" />
     <circle cx="12" cy="12" r="1.3" />
     <circle cx="19" cy="12" r="1.3" />
+  </Glyph>
+);
+
+// Floating view-toolbar glyphs (design §7 zoom/fit/fullscreen). Token-coloured.
+export const ZoomInIcon = () => (
+  <Glyph>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3" />
+    <path d="M11 8v6M8 11h6" />
+  </Glyph>
+);
+
+export const ZoomOutIcon = () => (
+  <Glyph>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3" />
+    <path d="M8 11h6" />
+  </Glyph>
+);
+
+// "Fit to stage" — four inward corners.
+export const FitIcon = () => (
+  <Glyph>
+    <path d="M4 9V5a1 1 0 0 1 1-1h4" />
+    <path d="M20 9V5a1 1 0 0 0-1-1h-4" />
+    <path d="M4 15v4a1 1 0 0 0 1 1h4" />
+    <path d="M20 15v4a1 1 0 0 1-1 1h-4" />
+  </Glyph>
+);
+
+// Fullscreen / expand — four outward corners.
+export const FullscreenIcon = () => (
+  <Glyph>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+    <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  </Glyph>
+);
+
+export const CloseIcon = () => (
+  <Glyph>
+    <path d="M18 6 6 18" />
+    <path d="M6 6l12 12" />
   </Glyph>
 );
 

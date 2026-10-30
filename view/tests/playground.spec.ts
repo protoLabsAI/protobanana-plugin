@@ -761,7 +761,19 @@ for (const theme of ["light", "dark"]) {
       await inpaint.click();
       await prompt(page).fill("a bunch of daisies");
       await expect(canvas).toBeVisible();
-      await canvas.click({ position: { x: 30, y: 30 } });
+      // The stage fits-to-stage on entering a mode (pan 0, centred), so a source
+      // pixel maps to a known screen point; paint away from the floating toolbars.
+      const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+      const abs = Math.min(vb.width / 640, vb.height / 480);
+      const paintAt = async (sx: number, sy: number) => {
+        const x = vb.x + (vb.width - 640 * abs) / 2 + abs * sx;
+        const y = vb.y + (vb.height - 480 * abs) / 2 + abs * sy;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 8, y + 6, { steps: 3 });
+        await page.mouse.up();
+      };
+      await paintAt(480, 360);
       await expect(submit).toBeEnabled();
       // Re-selecting the active verb keeps the mounted painter and its mask.
       await inpaint.click();
@@ -773,7 +785,7 @@ for (const theme of ["light", "dark"]) {
       await expect(submit).toBeDisabled();
       await prompt(page).press("Control+Enter");
       expect(requests).toHaveLength(0);
-      await canvas.click({ position: { x: 150, y: 112 } });
+      await paintAt(300, 240);
       await submit.click();
       await expect.poll(() => requests.length).toBe(1);
       expect(requests[0]).toMatchObject({ op: "inpaint", parent_id: "root", params: { image: "root" } });
@@ -781,7 +793,7 @@ for (const theme of ["light", "dark"]) {
         const img = new Image(); img.src = src; await img.decode();
         const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
         const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
-        return { old: ctx.getImageData(64, 64, 1, 1).data[3], fresh: ctx.getImageData(320, 239, 1, 1).data[3] };
+        return { old: ctx.getImageData(480, 360, 1, 1).data[3], fresh: ctx.getImageData(300, 240, 1, 1).data[3] };
       }, requests[0].params.mask as string);
       expect(pixels).toEqual({ old: 255, fresh: 0 });
       if (verb === "Outpaint") {
@@ -855,6 +867,138 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: "Leave Inpaint mode", exact: true })).toHaveCount(0);
     expect(requests).toHaveLength(0);
+  });
+}
+
+// ===========================================================================
+// Canvas zoom + pan (design §7 item 7): the floating view toolbar shows only with
+// an image; wheel zoom keeps the point under the cursor fixed; drag pans; Fit
+// restores the 417d0fa fitted box; the stage never scrolls; and Inpaint stays
+// source-accurate at zoom (the exported mask is source-size and aligned).
+// ===========================================================================
+
+const viewBar = (page: Page) => page.getByRole("toolbar", { name: "View controls", exact: true });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: the view toolbar is absent with no image and named once one is shown`, async ({ page }) => {
+    await setup(page, theme);
+    await expect(viewBar(page)).toHaveCount(0);
+    await pickTile(page, 0);
+    await expect(viewBar(page)).toBeVisible();
+    for (const name of ["Zoom out", "Zoom to 100%", "Zoom in", "Fit to stage", "Fullscreen"]) {
+      await expect(viewBar(page).getByRole("button", { name, exact: true })).toBeVisible();
+    }
+  });
+
+  test(`${theme}: wheel zoom scales the image and keeps the cursor point fixed, with no stage scrollbars`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    const img = page.getByAltText("Current image", { exact: true });
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(640);
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    const cx = vb.x + vb.width * 0.35, cy = vb.y + vb.height * 0.4;
+    // The on-screen fraction of the (rigidly transformed) image under the cursor
+    // is invariant, so a cursor-fixed zoom must keep that fraction at the cursor.
+    const before = await img.evaluate((el, p) => {
+      const r = el.getBoundingClientRect();
+      return { fx: (p.x - r.left) / r.width, fy: (p.y - r.top) / r.height, w: r.width };
+    }, { x: cx, y: cy });
+    await page.mouse.move(cx, cy);
+    await page.mouse.wheel(0, -400);
+    const after = await img.evaluate((el, b) => {
+      const r = el.getBoundingClientRect();
+      return { px: r.left + b.fx * r.width, py: r.top + b.fy * r.height, w: r.width };
+    }, before);
+    expect(after.w).toBeGreaterThan(before.w + 20);
+    expect(Math.abs(after.px - cx)).toBeLessThanOrEqual(2);
+    expect(Math.abs(after.py - cy)).toBeLessThanOrEqual(2);
+    const scroll = await page.locator(".stage").evaluate((el) => ({
+      sh: el.scrollHeight, ch: el.clientHeight, sw: el.scrollWidth, cw: el.clientWidth,
+    }));
+    expect(scroll.sh).toBe(scroll.ch);
+    expect(scroll.sw).toBe(scroll.cw);
+  });
+
+  test(`${theme}: drag pans the image and Fit restores the fitted box`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    const img = page.getByAltText("Current image", { exact: true });
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(640);
+    const box = () => img.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    const fitted = await box();
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    const c = { x: vb.x + vb.width / 2, y: vb.y + vb.height / 2 };
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.wheel(0, -400); // zoom in first so there is room to pan
+    const zoomedX = (await box()).x;
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.down();
+    await page.mouse.move(c.x + 80, c.y + 50, { steps: 4 });
+    await page.mouse.up();
+    expect((await box()).x - zoomedX).toBeGreaterThan(50);
+    await viewBar(page).getByRole("button", { name: "Fit to stage", exact: true }).click();
+    const refit = await box();
+    expect(Math.abs(refit.w - fitted.w)).toBeLessThan(1);
+    expect(Math.abs(refit.h - fitted.h)).toBeLessThan(1);
+    expect(Math.abs(refit.x - fitted.x)).toBeLessThan(1);
+    expect(Math.abs(refit.y - fitted.y)).toBeLessThan(1);
+  });
+
+  test(`${theme}: Inpaint stays source-accurate at ~2x zoom`, async ({ page }) => {
+    const requests = await setup(page, theme);
+    await pickTile(page, 0); // root is 640x480
+    await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+    const canvas = page.getByLabel("Mask canvas", { exact: true }).locator("canvas").first();
+    await expect(canvas).toBeVisible();
+    // 100% (source 1:1) then +25% ×3 ≈ 1.95x, zoomed about centre so pan stays 0.
+    const pctBtn = viewBar(page).getByRole("button", { name: "Zoom to 100%", exact: true });
+    await pctBtn.click();
+    for (let i = 0; i < 3; i++) await viewBar(page).getByRole("button", { name: "Zoom in", exact: true }).click();
+    const pct = Number((await pctBtn.textContent())!.replace("%", ""));
+    expect(pct).toBeGreaterThan(150);
+    const abs = pct / 100;
+    const vb = (await page.getByLabel("Image viewport", { exact: true }).boundingBox())!;
+    // Centre maps to source (320,240) at any zoom with pan 0; paint off-centre.
+    const dx = 90, dy = 60;
+    const x = vb.x + vb.width / 2 + dx, y = vb.y + vb.height / 2 + dy;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 6, y + 4, { steps: 3 });
+    await page.mouse.up();
+    const sx = Math.round(320 + dx / abs), sy = Math.round(240 + dy / abs);
+    await prompt(page).fill("a patch of blue sky");
+    await page.getByRole("button", { name: "Apply edit", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].op).toBe("inpaint");
+    expect(requests[0].params.image).toBe("root");
+    const pixels = await page.evaluate(async (args) => {
+      const img = new Image(); img.src = args.src; await img.decode();
+      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+      const ctx = c.getContext("2d")!; ctx.drawImage(img, 0, 0);
+      return {
+        w: c.width, h: c.height,
+        painted: ctx.getImageData(args.sx, args.sy, 1, 1).data[3],
+        center: ctx.getImageData(320, 240, 1, 1).data[3],
+        corner: ctx.getImageData(2, 2, 1, 1).data[3],
+      };
+    }, { src: requests[0].params.mask as string, sx, sy });
+    // Painted off-centre → transparent (edit); the untouched centre + corner stay
+    // opaque (preserve); the exported mask is the full source size.
+    expect(pixels.w).toBe(640);
+    expect(pixels.h).toBe(480);
+    expect(pixels.painted).toBe(0);
+    expect(pixels.center).toBe(255);
+    expect(pixels.corner).toBe(255);
+  });
+
+  test(`${theme}: Fullscreen opens a lightbox that Esc closes`, async ({ page }) => {
+    await setup(page, theme);
+    await pickTile(page, 0);
+    await viewBar(page).getByRole("button", { name: "Fullscreen", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Fullscreen image", exact: true });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
   });
 }
 

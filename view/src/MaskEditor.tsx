@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Stage, Layer, Image as CanvasImage } from "react-konva";
 import { fetchHistoryImage } from "./api";
+import type { Geom } from "./zoom";
 import { Slider } from "./ds-pending";
 
 /** Selection alpha is inverted exactly once at the gateway boundary. */
@@ -33,7 +34,21 @@ function useAccentRgb(): [number, number, number] {
   return rgb;
 }
 
-export function MaskEditor({ source, onChange }: { source: string; onChange: (mask: string) => void }) {
+// Inpaint mask painter (design §4.3 / §5). R2 item 7: the Konva stage now FILLS
+// the zoom viewport; the source image + the (source-size) mask selection are
+// drawn through a Layer carrying the shared fit+zoom transform (`geom`), and a
+// pointer maps back to SOURCE pixels via `layer.getRelativePointerPosition()` —
+// so a stroke lands on the right source coordinate at any zoom or pan and the
+// exported PNG stays source-size and aligned. Panning (space / middle-drag) is
+// owned by the stage, so `panLock` tells us to ignore those pointers here.
+export function MaskEditor({ source, onChange, geom, box, panLock, onNatural }: {
+  source: string;
+  onChange: (mask: string) => void;
+  geom: Geom | null;
+  box?: { W: number; H: number };
+  panLock?: boolean;
+  onNatural?: (iw: number, ih: number) => void;
+}) {
   const [image, setImage] = useState<HTMLImageElement>();
   const [selection, setSelection] = useState<HTMLCanvasElement>();
   const [error, setError] = useState("");
@@ -41,9 +56,11 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
   const [size, setSize] = useState(40);
   const [feather, setFeather] = useState(0);
   const [revision, redraw] = useState(0);
+  const layerRef = useRef<{ getRelativePointerPosition: () => { x: number; y: number } | null }>(null);
   const undo = useRef<ImageData[]>([]);
   const last = useRef<{ x: number; y: number }>();
   const changed = useRef(onChange); changed.current = onChange;
+  const natural = useRef(onNatural); natural.current = onNatural;
   const [r, g, b] = useAccentRgb();
   const tint = `rgb(${r}, ${g}, ${b})`;
   useEffect(() => {
@@ -58,6 +75,7 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
       setImage(img); setSelection(canvas);
+      natural.current?.(img.naturalWidth, img.naturalHeight);
     })().catch(() => { if (alive) setError("Could not load source for mask painting."); });
     return () => { alive = false; if (blob) URL.revokeObjectURL(blob); };
   }, [source]);
@@ -67,7 +85,7 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
     if (undo.current.length > 20) undo.current.shift();
   };
   const publish = () => { if (selection) { changed.current(exportMask(selection)); redraw(v => v + 1); } };
-  const scale = image ? Math.min(1, 300 / image.naturalWidth) : 1;
+  // Stroke in SOURCE pixels (the selection canvas is source-size).
   const stroke = (point: { x: number; y: number }) => {
     if (!selection || !last.current) return;
     const ctx = selection.getContext("2d")!;
@@ -78,54 +96,60 @@ export function MaskEditor({ source, onChange }: { source: string; onChange: (ma
     ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(point.x + 0.01, point.y);
     ctx.stroke(); ctx.restore(); last.current = point; redraw(v => v + 1);
   };
-  // `[` / `]` resize the brush (design §10). Handled on the fieldset so any
-  // focused tool/stage inside mask mode drives it.
+  const pointer = () => layerRef.current?.getRelativePointerPosition() ?? null;
+  // `[` / `]` resize the brush (design §10). Handled on the tools panel so any
+  // focused tool drives it.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "[") { e.preventDefault(); setSize(s => Math.max(1, s - 8)); }
     else if (e.key === "]") { e.preventDefault(); setSize(s => Math.min(300, s + 8)); }
   };
-  return <fieldset className="mask-editor" onKeyDown={onKeyDown}><legend>Paint mask</legend>
-    <p className="hint">Tinted area = edit. Exported PNG: transparent = edit, opaque = preserve. <kbd>[</kbd>/<kbd>]</kbd> resize the brush.</p>
-    <div className="slot-actions">
-      <button type="button" aria-pressed={!eraser} onClick={() => setEraser(false)}>Brush</button>
-      <button type="button" aria-pressed={eraser} onClick={() => setEraser(true)}>Eraser</button>
-      <button type="button" disabled={!selection} onClick={() => {
-        snapshot(); const ctx = selection!.getContext("2d")!;
-        const pixels = ctx.getImageData(0, 0, selection!.width, selection!.height);
-        for (let i = 0; i < pixels.data.length; i += 4) {
-          pixels.data[i] = r; pixels.data[i + 1] = g; pixels.data[i + 2] = b;
-          pixels.data[i + 3] = 255 - pixels.data[i + 3];
-        }
-        ctx.putImageData(pixels, 0, 0); publish();
-      }}>Invert</button>
-      <button type="button" disabled={!selection} onClick={() => {
-        snapshot(); selection!.getContext("2d")!.clearRect(0, 0, selection!.width, selection!.height); publish();
-      }}>Clear mask</button>
-      <button type="button" disabled={!undo.current.length} onClick={() => {
-        const pixels = undo.current.pop(); if (pixels) selection!.getContext("2d")!.putImageData(pixels, 0, 0); publish();
-      }}>Undo</button>
-    </div>
-    <label>Brush size (source px)<Slider ariaLabel="Brush size" min={1} max={300} value={size} onChange={setSize} /></label>
-    <label>Feather (source px)<Slider ariaLabel="Feather" min={0} max={50} value={feather} onChange={setFeather} /></label>
-    {error && <p role="alert">{error}</p>}
-    {image && selection && <div className="mask-canvas" style={{ touchAction: "none" }} aria-label="Mask canvas">
-      <Stage width={image.naturalWidth * scale} height={image.naturalHeight * scale}
+  const ready = image && selection && geom && box;
+  return <>
+    {ready && <div className="mask-stage" aria-label="Mask canvas" style={{ width: box!.W, height: box!.H }}>
+      <Stage width={box!.W} height={box!.H} style={{ touchAction: "none" }}
         onPointerDown={e => {
+          if (panLock || e.evt.button !== 0) return;
           e.evt.preventDefault();
-          const point = e.target.getStage()!.getPointerPosition()!;
-          snapshot(); last.current = { x: point.x / scale, y: point.y / scale }; stroke(last.current);
+          const p = pointer(); if (!p) return;
+          snapshot(); last.current = p; stroke(p);
         }}
-        onPointerMove={e => {
-          const point = e.target.getStage()!.getPointerPosition();
-          if (point && last.current) stroke({ x: point.x / scale, y: point.y / scale });
+        onPointerMove={() => {
+          if (panLock || !last.current) return;
+          const p = pointer(); if (p) stroke(p);
         }}
         onPointerUp={() => { if (last.current) { last.current = undefined; publish(); } }}
         onPointerLeave={() => { if (last.current) { last.current = undefined; publish(); } }}>
-        <Layer scaleX={scale} scaleY={scale}>
+        <Layer ref={layerRef as never} x={geom!.ox} y={geom!.oy} scaleX={geom!.absScale} scaleY={geom!.absScale}>
           <CanvasImage image={image} />
           <CanvasImage key={revision} image={selection} opacity={0.35} />
         </Layer>
       </Stage>
     </div>}
-  </fieldset>;
+    <fieldset className="mask-tools" onKeyDown={onKeyDown}>
+      <legend>Paint mask</legend>
+      <p className="hint">Tinted = edit. <kbd>[</kbd>/<kbd>]</kbd> brush size. Space/middle-drag to pan.</p>
+      <div className="slot-actions">
+        <button type="button" aria-pressed={!eraser} onClick={() => setEraser(false)}>Brush</button>
+        <button type="button" aria-pressed={eraser} onClick={() => setEraser(true)}>Eraser</button>
+        <button type="button" disabled={!selection} onClick={() => {
+          snapshot(); const ctx = selection!.getContext("2d")!;
+          const pixels = ctx.getImageData(0, 0, selection!.width, selection!.height);
+          for (let i = 0; i < pixels.data.length; i += 4) {
+            pixels.data[i] = r; pixels.data[i + 1] = g; pixels.data[i + 2] = b;
+            pixels.data[i + 3] = 255 - pixels.data[i + 3];
+          }
+          ctx.putImageData(pixels, 0, 0); publish();
+        }}>Invert</button>
+        <button type="button" disabled={!selection} onClick={() => {
+          snapshot(); selection!.getContext("2d")!.clearRect(0, 0, selection!.width, selection!.height); publish();
+        }}>Clear mask</button>
+        <button type="button" disabled={!undo.current.length} onClick={() => {
+          const pixels = undo.current.pop(); if (pixels) selection!.getContext("2d")!.putImageData(pixels, 0, 0); publish();
+        }}>Undo</button>
+      </div>
+      <label>Brush size (source px)<Slider ariaLabel="Brush size" min={1} max={300} value={size} onChange={setSize} /></label>
+      <label>Feather (source px)<Slider ariaLabel="Feather" min={0} max={50} value={feather} onChange={setFeather} /></label>
+      {error && <p role="alert">{error}</p>}
+    </fieldset>
+  </>;
 }

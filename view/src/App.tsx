@@ -16,19 +16,15 @@ import {
 import { ActionBar, type EditMode } from "./ActionBar";
 import { Composer, type Margins } from "./Composer";
 import { Gallery } from "./Gallery";
-import { MarginCanvas } from "./OpForm";
-import { MaskEditor } from "./MaskEditor";
+import { StageView } from "./StageView";
 import {
   Badge,
   Banner,
   Button,
   Callout,
   Drawer,
-  Empty,
-  ImagesIcon,
   PanelHeader,
   Progress,
-  Skeleton,
   Spinner,
   Tabs,
   ToastProvider,
@@ -648,41 +644,30 @@ export function App() {
           )}
           {focusError && <p className="banner banner-warn focus-error" role="alert">{focusError}</p>}
 
-          <div className="stage">
-            {loading ? (
-              <Skeleton className="stage-skeleton" />
-            ) : hasImage && mode === "inpaint" ? (
-              <MaskEditor source={editRef ?? ""} onChange={setMask} />
-            ) : hasImage && mode === "outpaint" ? (
-              <MarginCanvas url={current} params={margins as unknown as Record<string, unknown>} set={setMargin} />
-            ) : current ? (
-              <img className={`stage-img${activeRendering ? " is-dimmed" : ""}`} src={current} alt="Current image" />
-            ) : prunedSelected ? (
-              <Empty
-                className="stage-empty"
-                icon={<ImagesIcon />}
-                title="This image expired"
-                description="star images to keep them"
-              />
-            ) : !unreachable ? (
-              <Empty
-                className="stage-empty"
-                icon={<ImagesIcon />}
-                title="Describe an image to start"
-                description="Type a prompt below, or drop, paste, or upload an image."
-                action={<Button onClick={() => fileInput.current?.click()}>Upload</Button>}
-              />
-            ) : null}
-
-            {(activeRendering || calloutNodes.length > 0) && (
-              <div className="overlay" role="status">
-                {activeRendering && active && (
-                  <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
-                )}
-                {calloutNodes}
-              </div>
-            )}
-          </div>
+          <StageView
+            loading={loading}
+            hasImage={hasImage}
+            prunedSelected={prunedSelected}
+            unreachable={Boolean(unreachable)}
+            current={current}
+            editRef={editRef ?? ""}
+            mode={mode}
+            dimmed={activeRendering}
+            margins={margins}
+            setMargin={setMargin}
+            onMask={setMask}
+            onUpload={() => fileInput.current?.click()}
+            overlay={
+              (activeRendering || calloutNodes.length > 0) && (
+                <div className="overlay" role="status">
+                  {activeRendering && active && (
+                    <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
+                  )}
+                  {calloutNodes}
+                </div>
+              )
+            }
+          />
 
           <input
             ref={fileInput}

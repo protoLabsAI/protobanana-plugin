@@ -1,0 +1,9 @@
+# What the host-free test suite and CI need. At runtime protoAgent core
+# provides all of these (langchain/langchain-core/httpx/Pillow are core deps);
+# the plugin itself declares no requires_pip (protoAgent#1631).
+pytest>=8
+ruff>=0.6
+httpx>=0.27
+pillow>=10.3
+langchain-core>=0.3
+langchain>=1.0   # attachment-bridge middleware (langchain.agents.middleware)

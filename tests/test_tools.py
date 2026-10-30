@@ -236,3 +236,66 @@ def test_attachment_bridge_skips_plain_text_and_idless(plugin):
     ]}
     assert mw.before_model(state, None) is None
     assert reg.saved_media == []
+
+
+# ------------------------------------------------- gateway error readability
+
+
+def _status_error(status, text, json_body=None):
+    import httpx
+
+    req = httpx.Request("POST", "https://gw.example/v1/images/edits")
+    resp = httpx.Response(status, text=text, request=req) if json_body is None else \
+        httpx.Response(status, json=json_body, request=req)
+    return httpx.HTTPStatusError(f"{status}", request=req, response=resp)
+
+
+CLOUDFLARE_524 = ("<!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> "
+                  "<![endif]-->\n<head><title>api.proto-labs.ai | 524: A timeout occurred</title>")
+
+
+@pytest.mark.parametrize("status", [524, 502, 503, 504])
+def test_gateway_html_errors_become_one_readable_line(plugin, monkeypatch, status):
+    mod, _ = plugin
+
+    async def boom(*a, **kw):
+        raise _status_error(status, CLOUDFLARE_524)
+
+    monkeypatch.setattr(mod.client, "generate", boom)
+    out = run(mod.tools.generate_image.ainvoke({"prompt": "a red fox"}))
+    assert out.startswith("Error:") and f"HTTP {status}" in out
+    assert "<" not in out and "DOCTYPE" not in out and "\n" not in out
+    assert "wait a minute" in out
+
+
+def test_524_message_explains_the_100s_limit(plugin, monkeypatch):
+    mod, _ = plugin
+
+    async def boom(*a, **kw):
+        raise _status_error(524, CLOUDFLARE_524)
+
+    monkeypatch.setattr(mod.client, "edit", boom)
+    out = run(mod.tools.region_edit.ainvoke({"image_ref": DATA_URL, "region": "x", "prompt": "y"}))
+    assert "~100s" in out and "still be running" in out and "draft=true" in out
+
+
+def test_other_html_error_bodies_are_dropped(plugin, monkeypatch):
+    mod, _ = plugin
+
+    async def boom(*a, **kw):
+        raise _status_error(500, "<html><head><title>500</title></head><body>oops</body></html>")
+
+    monkeypatch.setattr(mod.client, "generate", boom)
+    out = run(mod.tools.generate_image.ainvoke({"prompt": "a red fox"}))
+    assert out == "Error: gateway returned 500: no detail"
+
+
+def test_json_error_detail_is_kept(plugin, monkeypatch):
+    mod, _ = plugin
+
+    async def boom(*a, **kw):
+        raise _status_error(400, "", {"error": {"message": "invalid size '0x0'"}})
+
+    monkeypatch.setattr(mod.client, "generate", boom)
+    out = run(mod.tools.generate_image.ainvoke({"prompt": "a red fox"}))
+    assert out == "Error: gateway returned 400: invalid size '0x0'"

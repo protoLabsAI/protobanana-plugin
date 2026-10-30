@@ -61,11 +61,21 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 - **Cutouts**: `remove_background` strips the old background's colour from soft
   edges (the light halo around hair/fluff), using the original image to un-mix
   edge pixels. Alpha only ever goes down, and only near the edge.
+- **Readable failures**: gateway 502/503/504/524 (Cloudflare's ~100s limit) come
+  back as one plain sentence with retry guidance, never as an HTML page. A
+  `region_edit` whose region wasn't found (result identical to the input) is
+  reported as an error instead of "Done"; same for an `edit_image` no-op.
+- `compose_images` has no size/aspect control (the gateway's multiref route takes
+  none); reshape a composite with `outpaint_image`.
 - `show_model: false` turns off attaching results to the model (text-only models degrade
   automatically either way; core caps attachments at 2 MiB/image).
 
 ## Tests
 
 ```bash
+pip install -r requirements-dev.txt
+ruff check .
 python -m pytest tests/   # host-free — vendored testkit, stubbed gateway
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same on every PR.

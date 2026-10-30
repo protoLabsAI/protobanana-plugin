@@ -88,6 +88,9 @@ def _fake_rgb_editor(seen, out_size=None):
     async def fake_edit(model, prompt, image, *, fields=None, mask=None):
         seen["image"] = image
         img = comfy_rgb(image)
+        # a real edit changes something: paint a small block at 25% in
+        w, h = img.size
+        ImageDraw.Draw(img).rectangle((w // 4, h // 4, w // 4 + w // 10, h // 4 + h // 10), fill=(0, 200, 0))
         if out_size:
             img = img.resize(out_size)
         return png(img)
@@ -406,3 +409,73 @@ def test_imaging_is_a_no_op_without_pillow(plugin, monkeypatch):
 
 async def _async(value):
     return value
+
+
+# ------------------------------------------------- 0.4.1: QA run follow-ups
+
+
+def test_region_edit_that_changes_nothing_is_an_error(plugin, monkeypatch):
+    """SAM matched nothing → empty mask → the composite returns the input."""
+    mod, reg = plugin
+    src = png(Image.new("RGB", (64, 48), (10, 120, 200)))
+
+    async def noop_edit(model, prompt, image, *, fields=None, mask=None):
+        return png(comfy_rgb(image))  # re-encoded, but pixel-identical
+
+    monkeypatch.setattr(mod.client, "edit", noop_edit)
+    out = run(mod.tools.region_edit.ainvoke({"image_ref": data_url(src), "region": "the unicorn",
+                                             "prompt": "make it gold"}))
+    assert out.startswith("Error: region_edit changed nothing")
+    assert "'the unicorn'" in out and "edit_image" in out
+    assert reg.saved_media == []  # nothing saved, nothing reported as Done
+
+
+def test_edit_image_that_changes_nothing_is_an_error(plugin, monkeypatch):
+    mod, reg = plugin
+    src = png(Image.new("RGB", (64, 48), (10, 120, 200)))
+
+    async def noop_edit(model, prompt, image, *, fields=None, mask=None):
+        return image  # byte-identical
+
+    monkeypatch.setattr(mod.client, "edit", noop_edit)
+    out = run(mod.tools.edit_image.ainvoke({"image_ref": data_url(src), "prompt": "x"}))
+    assert out.startswith("Error: edit_image returned the image unchanged")
+    assert reg.saved_media == []
+
+
+def test_unchanged_tolerates_round_trip_noise_but_sees_small_edits(plugin):
+    mod, _ = plugin
+    base = Image.new("RGB", (400, 300), (100, 100, 100))
+    noisy = base.copy()
+    noisy.putpixel((5, 5), (104, 97, 103))  # ±4 levels: codec/resample noise
+    assert mod.imaging.unchanged(png(base), png(noisy))
+    edited = base.copy()
+    ImageDraw.Draw(edited).rectangle((10, 10, 29, 29), fill=(250, 0, 0))  # 400 px of 120k
+    assert not mod.imaging.unchanged(png(base), png(edited))
+    # a result at another size is compared at the input's size
+    assert mod.imaging.unchanged(png(base), png(base.resize((420, 315))))
+
+
+def test_compose_docstring_states_no_aspect_control(plugin):
+    mod, _ = plugin
+    assert "NO size or aspect-ratio control" in mod.tools.compose_images.description
+
+
+def test_outpaint_caption_is_short(plugin, monkeypatch):
+    mod, _ = plugin
+
+    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
+        return png(Image.new("RGB", (96, 48)))
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    fill = ("continue the solid flat deep midnight blue background, empty, no text, no objects, "
+            "seamless with the existing gradient and lighting on the right side")
+    out = run(mod.tools.outpaint_image.ainvoke({"image_ref": data_url(cutout()), "prompt": fill,
+                                                "right": 32}))
+    assert "![Extended: continue the solid flat deep midnight blue background](" in out
+
+
+def test_size_clamp_covers_extreme_requests(plugin):
+    """QA asked for 10000x50 — clamped to the renderable range, not passed on."""
+    mod, _ = plugin
+    assert mod.tools._snap_size("10000x50") == (2048, 256)

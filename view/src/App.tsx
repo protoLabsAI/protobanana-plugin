@@ -330,9 +330,20 @@ export function App() {
     ready().then(async () => {
       try {
         const cat = await fetchCatalog();
-        if (alive) { setCatalog(cat.ops); setCatalogSource(cat.source); setWarnings(cat.warnings); }
+        if (!alive) return;
+        setCatalog(cat.ops); setCatalogSource(cat.source); setWarnings(cat.warnings);
+        // The static-fallback warning carries the raw gateway exception (an httpx
+        // error, often with a URL). Keep it OUT of the visible banner — log it and
+        // surface it only behind the banner's Details disclosure (fix round: a).
+        if (cat.source === "static" && cat.warnings.length) {
+          console.error("protoBanana: live model catalog unavailable —", cat.warnings.join("; "));
+        }
       }
-      catch (e) { if (alive) setUnreachable(String(e)); }
+      catch (e) {
+        if (!alive) return;
+        console.error("protoBanana: Studio plugin/API unreachable —", e);
+        setUnreachable(String(e));
+      }
     });
     return () => { alive = false; };
   }, []);
@@ -554,17 +565,29 @@ export function App() {
           {unreachable && (
             <Banner tone="error" role="alert" className="unreachable"
               action={<Button size="sm" onClick={() => location.reload()}>Reload</Button>}>
-              Couldn't reach the Studio plugin or its API. Renders and History are unavailable.
+              <p className="banner-line">Couldn't reach the Studio plugin or its API. Renders and History are unavailable.</p>
+              <details className="banner-details">
+                <summary>Details</summary>
+                <code>{unreachable}</code>
+              </details>
             </Banner>
           )}
 
           {catalogSource === "static" && !unreachable && (
-            <p className="banner banner-stale" role="status">
-              Showing the built-in schema — the live gateway catalog is unavailable. New models or
-              param changes won't appear until it's reachable again.
-            </p>
+            <div className="banner banner-stale" role="status">
+              <p className="banner-line">Couldn't load the live model catalog — showing the built-in list.</p>
+              {warnings.length > 0 && (
+                <details className="banner-details">
+                  <summary>Details</summary>
+                  <code>{warnings.join("\n")}</code>
+                </details>
+              )}
+            </div>
           )}
-          {warnings.length > 0 && (
+          {/* Alias-drift notes (gateway path only) are curated and URL-free; the
+              static-fallback warning is the raw exception and shows only behind
+              the banner's Details disclosure above (fix round: a). */}
+          {catalogSource !== "static" && warnings.length > 0 && (
             <div className="banner banner-warn" role="alert">
               <strong>Settings</strong>
               <ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>

@@ -364,6 +364,9 @@ body {
   border-left: 1px solid var(--border);
   background: var(--bg-raised);
   overflow: auto;
+  /* Reserve the scrollbar's gutter so a vertical scrollbar never overlaps the
+   * third thumbnail column (fix round: b — the 3-col grid stays fully inside). */
+  scrollbar-gutter: stable;
 }
 
 .gallery {
@@ -523,6 +526,35 @@ body {
 .banner-warn ul {
   margin: 6px 0 0;
   padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* The visible banner copy is one plain sentence; the raw error (an httpx
+ * exception, often with a URL) lives only behind this Details disclosure. */
+.banner-line {
+  margin: 0;
+}
+
+.banner-details {
+  margin-top: 6px;
+}
+
+.banner-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.banner-details code {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--bg-subtle);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

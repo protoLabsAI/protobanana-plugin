@@ -348,6 +348,55 @@ test("the unreachable banner shows with Reload when the API is down", async ({ p
   const banner = page.getByRole("alert");
   await expect(banner).toContainText("Couldn't reach the Studio plugin");
   await expect(banner.getByRole("button", { name: "Reload", exact: true })).toBeVisible();
+  // The raw error is tucked behind a Details disclosure, not shown by default.
+  const detail = banner.locator(".banner-details code");
+  await expect(detail).toBeHidden();
+  await banner.getByText("Details", { exact: true }).click();
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("503");
+});
+
+// Fix round (a): the gateway-unavailable fallback warning carries the raw httpx
+// exception (and its URL). The static-catalog banner must show one plain
+// sentence — no URL, no exception text — with the raw detail reachable only
+// through a Details disclosure.
+test("static-catalog banner hides the raw gateway error (and its URL) behind Details", async ({ page }) => {
+  const rawError = "ConnectError: [Errno 61] Connection refused — https://www.python-httpx.org/exceptions/";
+  await page.addInitScript(() => {
+    (window as any).pluginKit = {
+      initPluginView: () => ({}),
+      apiFetch: (path: string, init?: RequestInit) => fetch(`/fixture/${path}`, init),
+    };
+  });
+  await page.route("**/_ds/**", route => route.fulfill({ body: "", contentType: "text/javascript" }));
+  await page.route("**/fixture/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: catalog, source: "static", stale: true, warnings: [`Gateway catalog unavailable: ${rawError}`] } });
+    if (path.endsWith("/history")) return route.fulfill({ json: { records: [], next_cursor: null } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/?theme=light");
+
+  const banner = page.locator(".banner-stale");
+  await expect(banner).toBeVisible();
+
+  // The visible copy is one plain sentence: no URL, no exception text.
+  const line = (await banner.locator(".banner-line").innerText()).trim();
+  expect(line).not.toMatch(/https?:\/\//);
+  expect(line).not.toContain("ConnectError");
+  expect(line).not.toContain("Gateway catalog unavailable");
+  // Nothing in the banner leaks the URL / exception while the disclosure is shut.
+  const shut = await banner.innerText();
+  expect(shut).not.toMatch(/https?:\/\//);
+  expect(shut).not.toContain("ConnectError");
+
+  // The raw detail (with the URL) is reachable through the disclosure.
+  const detail = banner.locator(".banner-details code");
+  await expect(detail).toBeHidden();
+  await banner.getByText("Details", { exact: true }).click();
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("ConnectError");
+  await expect(detail).toContainText("https://www.python-httpx.org");
 });
 
 for (const theme of ["light", "dark"]) {
@@ -460,6 +509,52 @@ test("below 780px of the view's own width, History moves into a Drawer", async (
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "History", exact: true })).toHaveCount(0);
 });
+
+// Fix round (b): standalone at a wide viewport the 248px History column used to
+// spill past the right edge, clipping the filter button and the third thumbnail
+// column. It must stay fully inside the view at both wide and mid widths, with
+// all three thumbnail columns on-screen.
+for (const width of [1600, 1100]) {
+  test(`History stays inside the view at ${width}px with all three thumbnail columns visible`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const requests = await setup(page);
+
+    // Land a render so the canvas shows an image and History is populated.
+    await prompt(page).fill("A ceramic vase");
+    const tracking = page.waitForRequest(r => r.url().endsWith("/jobs/job-1") && r.method() === "GET");
+    await page.getByRole("button", { name: "Generate", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    await tracking;
+    await busDone(page, { job_id: "job-1", media_id: "leaf", elapsed_s: 3 });
+    await expect(page.getByAltText("Current image")).toBeVisible();
+
+    const view = page.locator(".images");
+    const history = page.locator(".history-col");
+    await expect(history).toBeVisible();
+    await expect(history.locator(".g-tile")).toHaveCount(records.length);
+
+    const viewBox = (await view.boundingBox())!;
+    const historyBox = (await history.boundingBox())!;
+    const viewRight = viewBox.x + viewBox.width;
+
+    // The filter button and the History column's right edge stay inside the view.
+    await expect(history.getByRole("button", { name: "Filter history", exact: true })).toBeInViewport();
+    expect(historyBox.x + historyBox.width).toBeLessThanOrEqual(viewRight + 1);
+
+    // All three thumbnail columns render inside the view — none clipped off-edge.
+    const topRow = history.locator(".g-grid .g-tile");
+    for (let i = 0; i < 3; i++) {
+      const tile = topRow.nth(i);
+      await expect(tile).toBeInViewport();
+      const box = (await tile.boundingBox())!;
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewRight + 1);
+    }
+
+    // And no horizontal page scroll is introduced at any width.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+}
 
 test("§6 removed-outright controls are absent", async ({ page }) => {
   await setup(page);

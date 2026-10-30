@@ -2,22 +2,22 @@
 
 Native image generation and editing for [protoAgent](https://github.com/protoLabsAI/protoAgent),
 backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway — self-hosted
-ComfyUI workflows (Qwen-Image-2.1, SAM 3 region edit, BiRefNet)
-behind LiteLLM.
+ComfyUI workflows (Qwen-Image-2.1 / 2.1 Turbo, SAM 3 region edit, BiRefNet background
+removal) behind LiteLLM.
 
-The agent gets eight tools; every result is persisted to the core media store, renders
+The agent gets seven tools; every result is persisted to the core media store, renders
 inline in chat, and — on a vision model — is attached to the tool result so the agent can
 **see** what it just made and iterate (generate → look → refine).
 
-| Tool | Route | Use |
-|---|---|---|
-| `generate_image` | `/images/generations` | Text-to-image — `draft: true` routes to the 8-step Qwen-Image-2.1 Turbo tier (~10s vs ~32s warm) for rapid prototyping |
-| `inpaint_image` | `/images/edits` (+mask) | Paint or supply a source-sized alpha mask: transparent = edit, opaque = preserve |
-| `edit_image` | `/images/edits` | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
-| `region_edit` | `/images/edits` (+`grounding`) | Change one object, leave the rest untouched |
-| `remove_background` | `/images/edits` (bgremove) | Sticker/cutout on transparency |
-| `compose_images` | `/chat/completions` (multiref alias) | Combine 2–3 references into one image |
-| `outpaint_image` | `/images/edits` (+margins) | Extend the canvas |
+| Tool | Route | Default alias (setting) | Use |
+|---|---|---|---|
+| `generate_image` | `/images/generations` | `protolabs/qwen-image` (`gen_model`); draft: `protolabs/qwen-image-2-1-turbo` (`fast_gen_model`) | Text-to-image — `draft: true` routes to the 8-step Qwen-Image-2.1 Turbo tier (~10s vs ~32s warm) for rapid prototyping |
+| `edit_image` | `/images/edits` | `protolabs/qwen-image-edit` (`edit_model`); draft: `protolabs/qwen-image-edit-turbo` (`fast_edit_model`) | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
+| `region_edit` | `/images/edits` (+`grounding`) | `protolabs/qwen-image-region-edit` (`region_model`) | Change one object (SAM 3 mask), leave the rest untouched |
+| `remove_background` | `/images/edits` | `protolabs/qwen-image-bgremove` (`bgremove_model`) | Sticker/cutout on transparency (BiRefNet) |
+| `compose_images` | `/chat/completions` | `protolabs/qwen-image-multiref` (`compose_model`) | Combine 2–3 references into one image |
+| `outpaint_image` | `/images/edits` (+margins) | `protolabs/qwen-image-outpaint` (`outpaint_model`) | Extend the canvas |
+| `inpaint_image` | `/images/edits` (+`mask_image`) | `protolabs/qwen-image-inpaint` (`inpaint_model`) | Paint or supply a source-sized alpha mask: transparent = edit, opaque = preserve. The mask rides a `mask_image` data-URL form field (the gateway's LiteLLM proxy drops an OpenAI `mask` file) |
 
 ## Install
 

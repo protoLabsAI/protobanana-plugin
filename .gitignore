@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Studio view (Vite + React). node_modules is never committed; view/dist IS —
+# git installs and the frozen desktop runtime have no Node, so the built output
+# is checked in (design R7). Do not add view/dist here.
+view/node_modules/
+view/.vite/
+npm-debug.log*

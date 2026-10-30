@@ -479,7 +479,11 @@ export function Popover({
   side = "bottom",
   className,
   children,
+  open: controlledOpen,
+  onOpenChange,
 }: {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   trigger: (api: { open: boolean; toggle: () => void }) => ReactNode;
   label?: string;
   align?: "start" | "end";
@@ -487,7 +491,9 @@ export function Popover({
   className?: string;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (value: boolean) => { setInternalOpen(value); onOpenChange?.(value); };
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -508,7 +514,7 @@ export function Popover({
 
   return (
     <div className={cx("pbx-popover", className)} ref={rootRef}>
-      {trigger({ open, toggle: () => setOpen((o) => !o) })}
+      {trigger({ open, toggle: () => setOpen(!open) })}
       {open && (
         <div
           className={cx("pbx-popover-panel", `pbx-popover-panel--${align}`, `pbx-popover-panel--${side}`)}
@@ -664,7 +670,11 @@ export function Menu({
   side = "top",
   className,
   children,
+  open: controlledOpen,
+  onOpenChange,
 }: {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   trigger: (api: { open: boolean; toggle: () => void }) => ReactNode;
   label?: string;
   align?: "start" | "end";
@@ -673,7 +683,7 @@ export function Menu({
   children: ReactNode;
 }) {
   return (
-    <Popover trigger={trigger} label={label} align={align} side={side} className={cx("pbx-menu", className)}>
+    <Popover open={controlledOpen} onOpenChange={onOpenChange} trigger={trigger} label={label} align={align} side={side} className={cx("pbx-menu", className)}>
       <div role="menu" className="pbx-menu-list">
         {children}
       </div>

@@ -1292,9 +1292,9 @@ body {
 
 .pbx-toasts {
   position: fixed;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 16px;
+  right: 16px;
+  max-width: calc(100vw - 32px);
   z-index: 80;
   display: grid;
   gap: 8px;
@@ -1688,7 +1688,7 @@ fieldset {
 
 .pbx-node {
   position: relative;
-  width: 176px;
+  width: 240px;
   box-sizing: border-box;
   padding: 8px;
   border: 1px solid var(--border);
@@ -1700,7 +1700,7 @@ fieldset {
 }
 
 .pbx-node--input {
-  width: 132px;
+  width: 240px;
 }
 
 .pbx-node.is-selected {
@@ -1717,6 +1717,7 @@ fieldset {
 }
 
 .pbx-node-title {
+  font-size: 14px;
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
@@ -1742,7 +1743,7 @@ fieldset {
 .pbx-node-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  height: 140px;
   border-radius: calc(var(--radius) - 3px);
   background: var(--bg-inset);
   display: grid;
@@ -1917,4 +1918,17 @@ fieldset {
 
 .pbx-ro-badge {
   font-size: 9px;
+}
+
+.pbx-inspector-slot { margin: 0; padding: 0; border: 0; min-width: 0; flex: 0 0 auto; }
+.pbx-inspector--empty { min-height: 150px; }
+
+/* xyflow's built-in input class also matches our custom typed input renderer. */
+.pbx-flow .react-flow__node-input {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  box-shadow: none;
 }

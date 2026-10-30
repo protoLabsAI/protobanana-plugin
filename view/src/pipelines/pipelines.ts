@@ -386,7 +386,7 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
       });
     }
   }
-  return { nodes, edges };
+  return { nodes: Object.keys(positions).length ? nodes : autoLayout(nodes, edges), edges };
 }
 
 /** A simple layered auto-layout (card: Auto-layout). Depth = longest ref path
@@ -410,7 +410,7 @@ export function autoLayout(nodes: GNode[], edges: GEdge[]): GNode[] {
   for (const n of nodes) (layers[depth[n.id]] ||= []).push(n.id);
   const pos = new Map<string, { x: number; y: number }>();
   for (const [d, ids] of Object.entries(layers)) {
-    ids.forEach((id, i) => pos.set(id, { x: 40 + Number(d) * 260, y: 40 + i * 150 }));
+    ids.forEach((id, i) => pos.set(id, { x: 40 + Number(d) * 300, y: 40 + i * 360 }));
   }
   return nodes.map((n) => ({ ...n, position: pos.get(n.id) || n.position }));
 }
@@ -440,6 +440,7 @@ export interface PipelineSummary {
   description: string;
   source: string;
   read_only: boolean;
+  spec: Spec;
   expose_as_tool: boolean;
   inputs: Record<string, unknown>;
   steps: string[];
@@ -489,8 +490,7 @@ export async function listPipelines(): Promise<PipelineSummary[]> {
   return body.pipelines || [];
 }
 
-// The backend exposes GET /pipelines (summaries only) and POST /pipelines (save)
-// but no GET-one-spec route, so the canvas keeps the FULL specs it authors in a
+// The backend lists full specs; the canvas also keeps specs it authors in a
 // small localStorage store. That is also how `ui.positions` survives a reload
 // (acceptance r4): Save persists server-side (so the agent/runs can use it) AND
 // locally with the layout, and the editor restores the last-open graph on mount.

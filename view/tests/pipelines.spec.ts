@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { CatalogEntry } from "../src/api";
 import {
@@ -66,7 +66,7 @@ function buildChain(): { nodes: GNode[]; edges: GEdge[] } {
   (gen.data as OpNodeData).promoted = ["prompt"];
   (region.data as OpNodeData).params = { ...(region.data as OpNodeData).params, grounding: "the sky", prompt: "make it blue" };
   (comp.data as OpNodeData).params = { ...(comp.data as OpNodeData).params, prompt: "combine them" };
-  const subject: GNode = { id: inputNodeId("subject"), position: { x: 20, y: 240 }, data: { kind: "input", name: "subject", inputType: "text" } };
+  const subject: GNode = { id: inputNodeId("subject"), position: { x: 20, y: 300 }, data: { kind: "input", name: "subject", inputType: "text" } };
   const edges: GEdge[] = [
     { id: "e1", source: inputNodeId("subject"), sourceHandle: OUT_HANDLE, target: "gen", targetHandle: paramHandle("prompt") },
     { id: "e2", source: "gen", sourceHandle: OUT_HANDLE, target: "region", targetHandle: "image" },
@@ -112,7 +112,7 @@ test("round trip canvas graph → spec → graph preserves steps, refs and ui.po
   expect(spec.steps.find((s) => s.id === "region")!.image).toBe("gen");
   expect(spec.steps.find((s) => s.id === "comp")!.images).toEqual(["bg", "gen"]);
   expect(spec.ui?.positions?.["region"]).toEqual({ x: 300, y: 40 });
-  expect(spec.ui?.positions?.[inputNodeId("subject")]).toEqual({ x: 20, y: 240 });
+  expect(spec.ui?.positions?.[inputNodeId("subject")]).toEqual({ x: 20, y: 300 });
 
   // Re-hydrate and compare node identity, positions and the edge set.
   const g1 = specToGraph(spec, catalog);
@@ -198,6 +198,9 @@ test("pipelines sources use the pbx-* namespace, never the kit's pl-*", () => {
 
 // ==================================================================== browser
 
+const bundled = readdirSync("../pipelines").filter((n) => /\.(yaml|yml|json)$/.test(n))
+  .map((n) => parseSpecText(readFileSync(`../pipelines/${n}`, "utf8")));
+
 const kitCss = readFileSync(fileURLToPath(new URL("./fixtures/plugin-kit.generated.css", import.meta.url)), "utf8");
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#e8bb65"/><circle cx="320" cy="240" r="120" fill="#504550"/></svg>';
@@ -234,7 +237,7 @@ async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: 
     const url = new URL(route.request().url());
     const path = url.pathname;
     const method = route.request().method();
-    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: catalog, source: "gateway" } });
+    if (path.endsWith("/catalog")) return route.fulfill({ json: { ops: [...catalog, { op: "protolabs/qwen-image", label: "protolabs/qwen-image" }, { op: "unknown", label: "" }], source: "gateway" } });
     if (path.endsWith("/image")) return route.fulfill({ body: svg, contentType: "image/svg+xml" });
     if (path.endsWith("/history")) {
       result.historyReads++;
@@ -245,7 +248,7 @@ async function setup(page: Page, opts: { theme?: string; seed?: Spec; history?: 
       result.save.push(body);
       return route.fulfill({ json: { id: body.id, source: "saved" } });
     }
-    if (path.endsWith("/pipelines")) return route.fulfill({ json: { pipelines: [] } });
+    if (path.endsWith("/pipelines")) return route.fulfill({ json: { pipelines: bundled.map((spec) => ({ id: spec.id, name: spec.name, source: "bundled", read_only: false, spec })) } });
     if (path.endsWith("/run") && method === "POST") {
       const m = path.match(/pipelines\/([^/]+)\/run/);
       result.run.push({ id: m?.[1] || "", inputs: route.request().postDataJSON()?.inputs });
@@ -646,3 +649,65 @@ for (const mode of ["Inpaint", "Outpaint"]) {
     await expect(page.getByRole("button", { name: `Leave ${mode} mode`, exact: true })).toHaveCount(0);
   });
 }
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1440, 760]) {
+    test(`review regressions ${theme} ${width}: readable non-overlapping nodes and usable menus`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await setup(page, { theme });
+      await openPipelines(page);
+      await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+      const slot = (await page.locator(".pbx-inspector-slot").boundingBox())!;
+      const empty = (await page.locator(".pbx-inspector-empty").boundingBox())!;
+      expect(empty.y).toBeGreaterThanOrEqual(slot.y);
+      expect(empty.y + empty.height).toBeLessThanOrEqual(slot.y + slot.height);
+      expect(slot.y + slot.height).toBeLessThanOrEqual(1000);
+      await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+      for (const label of ["Generate", "Remove background", "Edit"]) {
+        await page.getByRole("button", { name: "Add node", exact: true }).click();
+        const labels = await page.getByRole("menuitem").allTextContents();
+        expect(labels).toEqual(["Text", "Image", "Mask", "Generate", "Edit", "Region edit", "Inpaint", "Outpaint", "Remove background", "Compose"]);
+        await page.getByRole("menuitem", { name: label, exact: true }).click();
+        await expect(page.getByRole("menu")).toHaveCount(0);
+      }
+      await expect(page.locator(".react-flow__node")).toHaveCount(3);
+      await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+      const boxes = await page.locator(".react-flow__node").evaluateAll((nodes) => nodes.map((n) => {
+        const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height };
+      }));
+      for (const [i, a] of boxes.entries()) {
+        expect(a.w).toBeGreaterThanOrEqual(180);
+        expect(a.w).toBeLessThanOrEqual(320);
+        for (const b of boxes.slice(i + 1)) expect(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y).toBe(true);
+      }
+      for (const spec of bundled) {
+        await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+        await page.getByRole("option", { name: spec.name, exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Pipeline", exact: true })).toHaveCount(0);
+        await expect(page.locator(".react-flow__node")).toHaveCount(spec.steps.length + Object.keys(spec.inputs || {}).length);
+        expect(await page.locator(".react-flow__node").count()).toBeGreaterThanOrEqual(2);
+        await expect.poll(() => page.locator(".react-flow__edge").count()).toBeGreaterThanOrEqual(1);
+      }
+    });
+  }
+}
+
+
+test("read-only pipelines open for inspection and become editable through Duplicate", async ({ page }) => {
+  await setup(page);
+  const spec = bundled[0];
+  await page.route("**/fixture/pipelines", (route) => route.fulfill({ json: { pipelines: [
+    { id: spec.id, name: spec.name, source: "another-plugin", read_only: true, spec },
+  ] } }));
+  await openPipelines(page);
+  // Refresh the listing via Save, since the canvas may have mounted before this route.
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("option").filter({ hasText: spec.name }).click();
+  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add node", exact: true })).toBeDisabled();
+  await expect.poll(() => page.locator(".react-flow__edge").count()).toBeGreaterThanOrEqual(1);
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Add node", exact: true })).toBeEnabled();
+  await expect(page.getByText("Read-only", { exact: true })).toHaveCount(0);
+});

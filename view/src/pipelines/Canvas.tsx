@@ -212,7 +212,7 @@ function ViewToolbar({ stageRef }: { stageRef: React.RefObject<HTMLDivElement> }
     const el = stageRef.current;
     if (!el) return;
     if (document.fullscreenElement) document.exitFullscreen?.();
-    else el.requestFullscreen?.().catch(() => flow.fitView({ padding: 0.2 }));
+    else el.requestFullscreen?.().catch(() => flow.fitView({ padding: 0.2, maxZoom: 1 }));
   };
   return (
     <div className="view-toolbar" role="toolbar" aria-label="View controls">
@@ -223,7 +223,7 @@ function ViewToolbar({ stageRef }: { stageRef: React.RefObject<HTMLDivElement> }
         <Button size="xs" icon variant="ghost" aria-label="Zoom in" onClick={() => flow.zoomIn()}><ZoomInIcon /></Button>
       </Tooltip>
       <Tooltip label="Fit to view">
-        <Button size="xs" icon variant="ghost" aria-label="Fit to view" onClick={() => flow.fitView({ padding: 0.2 })}><FitIcon /></Button>
+        <Button size="xs" icon variant="ghost" aria-label="Fit to view" onClick={() => flow.fitView({ padding: 0.2, maxZoom: 1 })}><FitIcon /></Button>
       </Tooltip>
       <Tooltip label="Fullscreen">
         <Button size="xs" icon variant="ghost" aria-label="Fullscreen" onClick={fullscreen}><FullscreenIcon /></Button>
@@ -462,6 +462,9 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   // keeps its agent-tool exposure and description on Save (pipeline_tool_factory
   // requires expose_as_tool === true).
   const [meta, setMeta] = useState<SpecMeta>(() => ({ id: "untitled_pipeline", name: "Untitled pipeline" }));
+  const [addOpen, setAddOpen] = useState(false);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
 
   const [runId, setRunId] = useState<string | null>(null);
@@ -491,7 +494,9 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     setRunId(null);
     setRunStatus("idle");
     setRunNodes({});
-  }, [catalog]);
+    setReadOnly(false);
+    requestAnimationFrame(() => flow.fitView({ padding: 0.2, maxZoom: 1 }));
+  }, [catalog, flow]);
 
   // Restore the last-open graph on mount (card r4: ui.positions survive a
   // reload — the editor keeps full specs in localStorage, see pipelines.ts).
@@ -542,22 +547,38 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   // ---- node/graph mutations ------------------------------------------------
 
+  const placeNode = useCallback((node: GNode) => {
+    const existing = nodesRef.current;
+    const source = existing.find((n) => n.id === selectedId);
+    let pos = source ? { x: source.position.x + 300, y: source.position.y } : { x: 40, y: 40 };
+    // Reserve the measured footprint, including promoted ports and failure UI.
+    while (existing.some((n) => pos.x < n.position.x + (n.measured?.width ?? 240) + 32 &&
+      pos.x + 272 > n.position.x && pos.y < n.position.y + (n.measured?.height ?? 320) + 32 &&
+      pos.y + 352 > n.position.y)) pos = { x: pos.x, y: pos.y + 360 };
+    node.position = pos;
+    setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...node, selected: true } as unknown as Node]);
+    if (source && node.data.kind === "op") {
+      const port = (REF_PORTS[node.data.op] || []).find((p) => connectionAllowed(
+        nodeOutputType(source.data as unknown as NodeData), { kind: "ref", type: p.type }));
+      if (port) setEdges((es) => [...es, { id: `e-${source.id}-${node.id}-${port.name}`, source: source.id,
+        sourceHandle: OUT_HANDLE, target: node.id, targetHandle: port.name }]);
+    }
+    setSelectedId(node.id);
+    setAddOpen(false);
+    requestAnimationFrame(() => flow.setCenter(pos.x + 120, pos.y + 140, { zoom: 1 }));
+  }, [selectedId, flow]);
+
   const addOpNode = useCallback((entry: CatalogEntry) => {
-    const id = newNodeId(entry.op, nodesRef.current.map((n) => n.id));
-    const pos = { x: 80 + (nodesRef.current.length % 4) * 60, y: 80 + (nodesRef.current.length % 6) * 40 };
-    setNodes((ns) => [...ns, makeOpNode(entry, pos, id) as unknown as Node]);
-    setSelectedId(id);
-  }, []);
+    placeNode(makeOpNode(entry, { x: 0, y: 0 }, newNodeId(entry.op, nodesRef.current.map((n) => n.id))));
+  }, [placeNode]);
 
   const addInputNode = useCallback((inputType: PortType) => {
     const existing = new Set(nodesRef.current.map((n) => n.id));
     let i = 1;
     let name = `${inputType}_${i}`;
     while (existing.has(inputNodeId(name))) name = `${inputType}_${++i}`;
-    const node: GNode = { id: inputNodeId(name), type: "input", position: { x: 20, y: 40 + nodesRef.current.length * 30 }, data: { kind: "input", name, inputType } };
-    setNodes((ns) => [...ns, node as unknown as Node]);
-    setSelectedId(node.id);
-  }, []);
+    placeNode({ id: inputNodeId(name), type: "input", position: { x: 0, y: 0 }, data: { kind: "input", name, inputType } });
+  }, [placeNode]);
 
   const patchSelected = useCallback((patch: Partial<OpNodeData | InputNodeData>) => {
     const selected = nodesRef.current.find((n) => n.id === selectedId);
@@ -594,11 +615,11 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   }, [selectedId]);
 
   const deleteSelected = useCallback(() => {
-    if (!selectedId) return;
+    if (!selectedId || readOnly) return;
     setNodes((ns) => ns.filter((n) => n.id !== selectedId));
     setEdges((es) => es.filter((e) => e.source !== selectedId && e.target !== selectedId));
     setSelectedId(null);
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   // ---- save / load / duplicate / export / import / auto-layout ------------
 
@@ -607,6 +628,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const currentSpec = useCallback((): Spec => graphToSpec(asGraph().nodes, asGraph().edges, meta), [asGraph, meta]);
 
   const doSave = useCallback(async (): Promise<Spec | null> => {
+    if (readOnly) return null;
     const spec = currentSpec();
     try {
       await savePipeline(spec);
@@ -619,9 +641,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       toast("Could not save — see the error");
       return null;
     }
-  }, [currentSpec, pipelines, toast]);
+  }, [currentSpec, pipelines, toast, readOnly]);
 
   const doNew = useCallback(() => {
+    setReadOnly(false);
     const id = `untitled_${++pipelineSeq}`;
     setNodes([]); setEdges([]); setSelectedId(null);
     setMeta({ id, name: "Untitled pipeline" });
@@ -630,6 +653,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   }, []);
 
   const doDuplicate = useCallback(() => {
+    setReadOnly(false);
     const id = slugifyId(`${meta.id}-copy`);
     // A duplicate is a full copy: keep description/expose_as_tool, only the id
     // and name change.
@@ -664,10 +688,12 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     setNodes(laid as unknown as Node[]);
   }, [asGraph]);
 
-  const loadListed = useCallback((id: string) => {
-    const local = loadLocalSpec(id);
-    if (local) { openSpec(local); return; }
-    toast("Open its file to edit — only pipelines saved here keep their full layout");
+  const loadListed = useCallback((p: PipelineSummary) => {
+    const spec = p.spec || loadLocalSpec(p.id);
+    if (!spec) { toast("Pipeline could not be loaded"); return; }
+    openSpec(spec);
+    setReadOnly(p.read_only);
+    setPipelineOpen(false);
   }, [openSpec, toast]);
 
   // ---- run tracking --------------------------------------------------------
@@ -777,10 +803,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const flowRef = useRef<HTMLDivElement>(null);
   const onCanvasKeyDown = (e: React.KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
-    if (!mod && e.key === "1") { e.preventDefault(); flow.fitView({ padding: 0.2 }); return; } // fit (declared keybinding)
+    if (!mod && e.key === "1") { e.preventDefault(); flow.fitView({ padding: 0.2, maxZoom: 1 }); return; } // fit (declared keybinding)
     if (mod && e.key.toLowerCase() === "c") {
       clipboard.current = nodesRef.current.filter((n) => n.id === selectedId);
-    } else if (mod && e.key.toLowerCase() === "v" && clipboard.current.length) {
+    } else if (!readOnly && mod && e.key.toLowerCase() === "v" && clipboard.current.length) {
       e.preventDefault();
       const existing = nodesRef.current.map((n) => n.id);
       const copies = clipboard.current
@@ -790,7 +816,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
           existing.push(id);
           return { ...n, id, position: { x: n.position.x + 40, y: n.position.y + 40 }, selected: false } as Node;
         });
-      if (copies.length) setNodes((ns) => [...ns, ...copies]);
+      if (copies.length) placeNode(copies[0] as unknown as GNode);
     }
   };
 
@@ -802,43 +828,47 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const running = runStatus === "running";
 
   const addNodeMenu = (
-    <Menu label="Add node" align="start" side="bottom"
+    <Menu open={addOpen} onOpenChange={setAddOpen} label="Add node" align="start" side="bottom"
       trigger={({ toggle, open }) => (
-        <Button size="xs" variant="ghost" aria-label="Add node" aria-expanded={open} onClick={toggle}>+ Add node</Button>
+        <Button size="xs" variant="ghost" disabled={readOnly} aria-label="Add node" aria-expanded={open} onClick={toggle}>+ Add node</Button>
       )}>
-      {(catalog || []).map((entry) => (
-        <MenuItem key={entry.op} onClick={() => addOpNode(entry)}>{entry.label}</MenuItem>
-      ))}
-      <MenuItem onClick={() => addInputNode("text")}>Input: text</MenuItem>
-      <MenuItem onClick={() => addInputNode("image")}>Input: image</MenuItem>
-      <MenuItem onClick={() => addInputNode("mask")}>Input: mask</MenuItem>
+      <span className="pbx-field-label">Inputs</span>
+      <MenuItem onClick={() => addInputNode("text")}>Text</MenuItem>
+      <MenuItem onClick={() => addInputNode("image")}>Image</MenuItem>
+      <MenuItem onClick={() => addInputNode("mask")}>Mask</MenuItem>
+      <span className="pbx-field-label">Operations</span>
+      {Object.entries({ generate: "Generate", edit: "Edit", region_edit: "Region edit", inpaint: "Inpaint",
+        outpaint: "Outpaint", remove_background: "Remove background", compose: "Compose" }).map(([op, label]) => {
+        const entry = catalog?.find((e) => e.op === op);
+        return entry ? <MenuItem key={op} onClick={() => addOpNode({ ...entry, label })}>{label}</MenuItem> : null;
+      })}
     </Menu>
   );
 
   const pipelineMenu = (
-    <Popover label="Pipeline" align="start" side="bottom" className="pbx-pipeline-menu"
+    <Popover open={pipelineOpen} onOpenChange={setPipelineOpen} label="Pipeline" align="start" side="bottom" className="pbx-pipeline-menu"
       trigger={({ toggle, open }) => (
         <Button size="xs" variant="ghost" aria-label="Pipeline menu" aria-expanded={open} onClick={toggle}>Pipeline ▾</Button>
       )}>
       <div className="pbx-pipeline-panel">
         <FormField label="Name">
-          <Input aria-label="Pipeline name" value={meta.name}
+          <Input disabled={readOnly} aria-label="Pipeline name" value={meta.name}
             onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value, id: slugifyId(e.target.value) }))} />
         </FormField>
         <div className="pbx-pipeline-actions">
           <Button size="xs" variant="ghost" onClick={doNew}>New</Button>
-          <Button size="xs" variant="ghost" onClick={doSave}>Save</Button>
+          <Button size="xs" variant="ghost" disabled={readOnly} onClick={doSave}>Save</Button>
           <Button size="xs" variant="ghost" onClick={doDuplicate}>Duplicate</Button>
           <Button size="xs" variant="ghost" onClick={doExport}>Export file</Button>
           <Button size="xs" variant="ghost" onClick={() => fileInput.current?.click()}>Import file</Button>
-          <Button size="xs" variant="ghost" onClick={doAutoLayout}>Auto-layout</Button>
+          <Button size="xs" variant="ghost" disabled={readOnly} onClick={doAutoLayout}>Auto-layout</Button>
         </div>
         <div className="pbx-pipeline-list" role="listbox" aria-label="Saved pipelines">
           {pipelines.length === 0 ? (
             <p className="hint">No saved pipelines yet.</p>
           ) : pipelines.map((p) => (
             <button key={p.id} type="button" role="option" aria-selected={p.id === meta.id} className="pbx-pipeline-item"
-              onClick={() => loadListed(p.id)}>
+              onClick={() => loadListed(p)}>
               <span>{p.name}</span>
               {p.read_only && <Badge className="pbx-ro-badge">read-only</Badge>}
             </button>
@@ -856,6 +886,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       <div className="pbx-graph-toolbar">
         {pipelineMenu}
         {addNodeMenu}
+        {readOnly && <><Badge>Read-only</Badge><Button size="xs" onClick={doDuplicate}>Duplicate</Button></>}
         <span className="pbx-graph-name" aria-hidden="true">{meta.name}</span>
         {running && <Badge className="rendering-badge"><Spinner size={12} /> running</Badge>}
       </div>
@@ -872,10 +903,13 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
             isValidConnection={isValidConnection}
             onSelectionChange={({ nodes: sel }) => setSelectedId(sel[0]?.id ?? null)}
             onPaneClick={() => setSelectedId(null)}
-            deleteKeyCode={["Delete", "Backspace"]}
-            minZoom={MIN_ABS}
-            maxZoom={MAX_ABS}
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            deleteKeyCode={readOnly ? null : ["Delete", "Backspace"]}
+            minZoom={Math.max(MIN_ABS, 0.25)}
+            maxZoom={Math.min(MAX_ABS, 1.5)}
             fitView
+            fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={18} />
@@ -895,6 +929,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
         )}
       </div>
 
+      <fieldset className="pbx-inspector-slot" disabled={readOnly}>
       <NodeInspector
         node={selectedNode}
         entry={selectedEntry}
@@ -907,6 +942,8 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
         onDelete={deleteSelected}
         outputMediaId={selectedRun?.media_id ?? null}
       />
+
+      </fieldset>
 
       <input ref={fileInput} className="visually-hidden" type="file" accept="application/json,.json,.yaml,.yml"
         aria-hidden="true" tabIndex={-1} onChange={(e) => { doImport(e.target.files?.[0]); e.target.value = ""; }} />

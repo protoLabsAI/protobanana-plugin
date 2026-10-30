@@ -128,9 +128,12 @@ test("inputs, aliases, multiple jobs, outpaint handles and single-ref identity",
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].params.person_image).toBe("");
   await page.getByLabel("Operation", { exact: true }).selectOption("remove_background");
+  // The badge must render on the DEFAULT alias path: the op is marked CC BY-NC in
+  // the catalog, not detected from the alias name (which is protolabs/qwen-image-bgremove).
+  await expect(page.getByText("Non-commercial · RMBG-2.0 is CC BY-NC", { exact: true })).toBeVisible();
   await page.getByText("Advanced alias override", { exact: true }).click();
   await page.getByLabel("Alias override", { exact: true }).fill("protolabs/qwen-image-bgremove-rmbg");
-  await expect(page.getByText("Non-commercial · RMBG CC BY-NC", { exact: true })).toBeVisible();
+  await expect(page.getByText("Non-commercial · RMBG-2.0 is CC BY-NC", { exact: true })).toBeVisible();
   await page.getByLabel("Upload Image", { exact: true }).setInputFiles({ name: "source.svg", mimeType: "image/svg+xml", buffer: Buffer.from(svg) });
   await expect(page.getByRole("textbox", { name: "Image reference", exact: true })).toHaveValue(/^data:image/);
   await page.getByRole("button", { name: "Remove background", exact: true }).click();

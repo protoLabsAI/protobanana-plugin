@@ -64,7 +64,11 @@ export function OpForm({ entry, current, records, onSubmit, params, setParams }:
     <div className="toggle" role="group" aria-label="Quality tier">{["draft", "final"].map(t =>
       <button key={t} type="button" aria-pressed={tier === t} onClick={() => setTier(t)}>{t === "draft" ? "Draft" : "Final"}</button>)}</div>
     <small className="desc">{selectedAlias}</small>
-    {/rmbg/i.test(selectedAlias) && <span className="badge-nc">Non-commercial · RMBG CC BY-NC</span>}
+    {/* Non-commercial badge is driven by the catalog licence flag (the op is
+        marked CC BY-NC regardless of the default alias name, design §1.2/R9), and
+        also fires for any explicitly-chosen RMBG alias on another op. */}
+    {(entry.licence?.non_commercial || /rmbg/i.test(selectedAlias)) &&
+      <span className="badge-nc">Non-commercial · {entry.licence?.note || "RMBG CC BY-NC"}</span>}
     {Object.entries(entry.params.properties).map(([key, schema]) => {
       const label = schema.title || key;
       const required = entry.params.required.includes(key);

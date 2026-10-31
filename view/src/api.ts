@@ -374,3 +374,52 @@ export function sendToAgent(rec: HistoryRecord): void {
   window.parent.postMessage({ type: "protoagent:chat:compose", text: composeText(rec) },
     location.ancestorOrigins?.[0] || location.origin);
 }
+
+// ----------------------------------------------------- workflow inspector (S10)
+
+/** One ComfyUI API-format node: a ``class_type`` and an ``inputs`` map. An input
+ *  value that is a ``[node_id, out_idx]`` tuple is a LINK from another node's
+ *  output; any other value is a literal. */
+export interface WorkflowNode {
+  class_type?: string;
+  inputs?: Record<string, unknown>;
+}
+
+/** A substituted slot the backend fills per render (prompt, seed, image, …). The
+ *  view highlights the named node (and, when given, the named input). */
+export interface WorkflowSlot {
+  node_id: string;
+  input?: string;
+}
+
+/** The ``GET /workflows/{alias}`` payload (Studio S10): the API-format workflow
+ *  (a ``{node_id: WorkflowNode}`` map plus a ``_doc`` string and other ``_``-keys
+ *  the loader strips), the workflow ``stem``, the ``workflows_hash`` it belongs
+ *  to, the substituted ``slots``, and this plugin's ``comfy_ui_url`` config — ""
+ *  when unset, in which case the view shows no "Open in ComfyUI" link. The URL is
+ *  never fetched, framed or proxied; it only becomes a new-tab link. */
+export interface WorkflowPayload {
+  workflow: Record<string, WorkflowNode | string>;
+  stem: string | null;
+  workflows_hash: string | null;
+  slots: WorkflowSlot[];
+  comfy_ui_url: string;
+}
+
+/** GET /workflows/{alias} — one alias's workflow for the Inspect drawer. The
+ *  optional ``workflowsHash`` lets the backend serve a cached graph without
+ *  another gateway call. A 404 (unknown alias) throws a readable error. */
+export async function fetchWorkflow(alias: string, workflowsHash?: string | null): Promise<WorkflowPayload> {
+  const q = workflowsHash ? `?workflows_hash=${encodeURIComponent(workflowsHash)}` : "";
+  const r = await apiFetch(`workflows/${alias}${q}`);
+  if (r.status === 404) throw new Error(`No workflow found for "${alias}".`);
+  if (!r.ok) throw new Error(`workflows/${alias} ${r.status}`);
+  const body = (await r.json()) as Partial<WorkflowPayload>;
+  return {
+    workflow: body.workflow || {},
+    stem: body.stem ?? null,
+    workflows_hash: body.workflows_hash ?? null,
+    slots: body.slots || [],
+    comfy_ui_url: body.comfy_ui_url || "",
+  };
+}

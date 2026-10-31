@@ -535,12 +535,14 @@ export function Drawer({
   onClose,
   side = "right",
   label,
+  className,
   children,
 }: {
   open: boolean;
   onClose: () => void;
   side?: "right" | "left";
   label?: string;
+  className?: string;
   children: ReactNode;
 }) {
   useEffect(() => {
@@ -556,7 +558,7 @@ export function Drawer({
   return (
     <div className="pbx-drawer-overlay" onMouseDown={onClose}>
       <div
-        className={cx("pbx-drawer", `pbx-drawer--${side}`)}
+        className={cx("pbx-drawer", `pbx-drawer--${side}`, className)}
         role="dialog"
         aria-modal="true"
         aria-label={label}

@@ -6,6 +6,7 @@ import type { EditMode } from "./ActionBar";
 import type { Margins } from "./Composer";
 import { MaskEditor } from "./MaskEditor";
 import { MarginCanvas } from "./OpForm";
+import { WorkflowDrawer } from "./inspector/WorkflowDrawer";
 import {
   Button,
   Empty,
@@ -87,6 +88,7 @@ export function StageView({
   current,
   parent,
   record,
+  workflowsHash,
   editRef,
   mode,
   dimmed,
@@ -103,6 +105,7 @@ export function StageView({
   current?: string;
   parent?: string;
   record?: HistoryRecord;
+  workflowsHash?: string | null;
   editRef: string;
   mode: EditMode;
   dimmed: boolean;
@@ -119,6 +122,18 @@ export function StageView({
   const [box, setBox] = useState<{ W: number; H: number }>();
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [lightbox, setLightbox] = useState(false);
+  // Image-info popover + the "Inspect workflow" drawer it opens (design §6 / S10).
+  // The popover is controlled so it stays mounted while the drawer is open — the
+  // trigger must survive for focus to return to it on close.
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [inspectOpen, setInspectOpen] = useState(false);
+  const inspectBtnRef = useRef<HTMLButtonElement>(null);
+  const closeInspect = useCallback(() => {
+    setInspectOpen(false);
+    // The popover stays open (infoOpen is held true below while the drawer is up),
+    // so the trigger is still mounted; refocus it after the drawer unmounts.
+    requestAnimationFrame(() => inspectBtnRef.current?.focus());
+  }, []);
 
   // Outpaint's preview keeps its own (smaller) intrinsic size so the edge handles
   // stay inside the stage and grabbable; its zoom is a simple centred scale of
@@ -318,11 +333,19 @@ export function StageView({
               extra={<>
                 {parent && <Tooltip label="Compare to parent"><Button size="xs" variant="ghost" aria-label="Compare to parent" aria-pressed={comparing}
                   disabled={inMode} onClick={() => setComparing(v => !v)}>Compare</Button></Tooltip>}
-                <Popover label="Image info" align="end" trigger={({ toggle, open }) => <Tooltip label="Image info">
+                <Popover label="Image info" align="end"
+                  open={infoOpen || inspectOpen}
+                  onOpenChange={(o) => { if (!inspectOpen) setInfoOpen(o); }}
+                  trigger={({ toggle, open }) => <Tooltip label="Image info">
                   <Button size="xs" icon variant="ghost" aria-label="Image info" aria-expanded={open} onClick={toggle}><MoreIcon /></Button>
                 </Tooltip>}>
                   <div className="image-info">
-                    <dl><dt>Alias</dt><dd>{record?.alias || "Unknown"}</dd>
+                    <dl><dt>Alias</dt><dd className="pbx-wf-alias-row">
+                      <span>{record?.alias || "Unknown"}</span>
+                      <Tooltip label="Inspect workflow"><Button ref={inspectBtnRef} size="xs" variant="ghost"
+                        aria-label="Inspect workflow" disabled={!record?.alias}
+                        onClick={() => setInspectOpen(true)}>Inspect workflow</Button></Tooltip>
+                    </dd>
                       <dt>Model id</dt><dd>{String(record?.params.model_id || record?.params.model || "Not recorded")}</dd>
                       <dt>Media id</dt><dd>{record?.media_id || "Uploaded image"}</dd></dl>
                     <pre>{JSON.stringify(record?.params || {}, null, 2)}</pre>
@@ -351,6 +374,13 @@ export function StageView({
       ) : null}
 
       {overlay}
+
+      <WorkflowDrawer
+        open={inspectOpen}
+        alias={record?.alias ?? null}
+        workflowsHash={workflowsHash}
+        onClose={closeInspect}
+      />
     </div>
   );
 }

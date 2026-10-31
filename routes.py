@@ -8,6 +8,7 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/api/plugins/protobanana/jobs``        POST a render, GET recent (gated)
 - ``/api/plugins/protobanana/jobs/<id>``   GET one job's state (gated)
 - ``/api/plugins/protobanana/catalog``     GET the gateway catalog, static fallback (gated)
+- ``/api/plugins/protobanana/workflows/<alias>``  GET one alias's API-format workflow (gated)
 - ``/api/plugins/protobanana/history``     GET a cursor page (op/source/starred) (gated)
 - ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
 - ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
@@ -35,7 +36,7 @@ import). Evaluating annotations eagerly keeps the real classes on the handlers.
 
 from pathlib import Path
 
-from . import catalog, history, jobs, pipelines
+from . import catalog, history, jobs, pipelines, workflows
 
 _API = "/api/plugins/protobanana"
 _PAGE = "/plugins/protobanana/studio"
@@ -152,6 +153,24 @@ def build_router(registry):
         ``source=static``/``stale=true`` when the gateway is unreachable."""
         cfg = dict(getattr(registry, "live_config", lambda: registry.config)() or {})
         return await catalog.build(cfg)
+
+    @router.get(f"{_API}/workflows/{{alias:path}}")
+    async def get_workflow(alias: str, workflows_hash: str | None = None):  # noqa: ANN202
+        """One alias's API-format workflow JSON (with ``_doc`` and ``slots``) for
+        the read-only "Inspect workflow" drawer (S10). Fetched through the gateway
+        — the ONLY transport — and cached per (alias, workflows_hash). The payload
+        also carries this plugin's ``comfy_ui_url`` config (default "") so the view
+        knows whether to show the "Open in ComfyUI" link; Python never fetches that
+        URL. An unknown alias or a gateway 404 → a readable 404; an unreachable
+        gateway → a 502 (there is no static workflow fallback)."""
+        cfg = dict(getattr(registry, "live_config", lambda: registry.config)() or {})
+        try:
+            return await workflows.get_workflow(cfg, alias, workflows_hash)
+        except workflows.WorkflowNotFound:
+            raise HTTPException(status_code=404,
+                                detail=f"unknown workflow alias {alias!r}")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"workflow unavailable: {exc}")
 
     # ---- shared history index (agent + studio) -----------------------------
     @router.get(f"{_API}/history")

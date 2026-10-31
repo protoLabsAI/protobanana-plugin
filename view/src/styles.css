@@ -1958,3 +1958,210 @@ fieldset {
   text-align: left;
   box-shadow: none;
 }
+
+/* ---- workflow inspector drawer (S10) ------------------------------------ */
+
+/* Wider than the History drawer (320px): a graph needs room, but it still sits
+ * inside the view at 1440 and 760 (min() caps it to the viewport). overflow is
+ * hidden so the graph owns its own pan/zoom and never shows a scrollbar. */
+.pbx-wf-drawer {
+  width: min(720px, 50vw);
+  overflow: hidden;
+  display: flex;
+}
+
+@media (max-width: 779px) {
+  .pbx-wf-drawer { width: 100vw; }
+}
+
+.pbx-wf {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--fg);
+}
+
+.pbx-wf-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.pbx-wf-head-main { min-width: 0; }
+
+.pbx-wf-head .pbx-tooltip {
+  top: calc(100% + 6px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+  transform: none;
+}
+
+.pbx-wf-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--subtle);
+}
+
+.pbx-wf-title {
+  margin: 2px 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The workflow's _doc. Capped so a long description scrolls locally instead of
+ * pushing the graph out of the drawer. */
+.pbx-wf-doc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-height: 7.5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+/* The graph owns the remaining height; overflow hidden means xyflow pans/zooms
+ * in place with no scrollbars (card rule 2). */
+.pbx-wf-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.pbx-wf-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.pbx-wf-flow { position: absolute; inset: 0; }
+
+.pbx-wf-flow .react-flow { background: transparent; }
+.pbx-wf-flow .react-flow__attribution { display: none; }
+
+.pbx-wf-flow .react-flow__edge-path {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.pbx-wf-flow .react-flow__edge .react-flow__edge-text {
+  fill: var(--subtle);
+  font-size: 9px;
+}
+
+.pbx-wf-flow .react-flow__edge .react-flow__edge-textbg { fill: var(--bg-inset); }
+
+.pbx-wf-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+/* The inspector toolbar reuses the floating .view-toolbar look; nudge its
+ * tooltips to stay inside the drawer's right edge (card rule 2). */
+.pbx-wf-toolbar { top: 8px; right: 8px; }
+.pbx-wf-toolbar .pbx-tooltip { right: 0; left: auto; transform: none; }
+
+/* ---- workflow nodes ----------------------------------------------------- */
+
+.pbx-wf-node {
+  position: relative;
+  box-sizing: border-box;
+  width: 250px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 12px;
+  box-shadow: 0 1px 3px var(--overlay);
+}
+
+/* A substituted slot: a tinted fill AND a solid accent ring AND the slot tag
+ * below — three cues, so it never relies on colour alone (design §10). No
+ * orange (house style §1.5): the accent token is indigo. */
+.pbx-wf-node--slot {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
+}
+
+.pbx-wf-node-title {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.pbx-wf-slot-tag {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Read-only handles: visible as link anchors but not grabbable. */
+.pbx-wf-handle.react-flow__handle {
+  width: 7px;
+  height: 7px;
+  border: 0;
+  background: var(--border-strong);
+  cursor: default;
+}
+
+/* ---- Open in ComfyUI link-out ------------------------------------------- */
+
+.pbx-wf-foot {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.pbx-wf-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.pbx-wf-link:hover { text-decoration: underline; }
+
+/* The alias row in the image-info popover: the alias text and its Inspect
+ * button sit on one line (design §6). */
+.pbx-wf-alias-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pbx-wf-alias-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

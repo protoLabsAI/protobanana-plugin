@@ -269,6 +269,9 @@ export function App() {
   // warnings flag configured aliases the gateway doesn't know (→ Settings hint).
   const [catalogSource, setCatalogSource] = useState<string>("gateway");
   const [warnings, setWarnings] = useState<string[]>([]);
+  // The gateway workflow-set hash (S7/S10): the workflow inspector keys its
+  // per-alias cache on it, so pass it to the stage's Inspect drawer.
+  const [workflowsHash, setWorkflowsHash] = useState<string | null>(null);
   const [unreachable, setUnreachable] = useState("");
   const [focusError, setFocusError] = useState("");
 
@@ -391,6 +394,7 @@ export function App() {
         const cat = await fetchCatalog();
         if (!alive) return;
         setCatalog(cat.ops); setCatalogSource(cat.source); setWarnings(cat.warnings);
+        setWorkflowsHash(cat.workflows_hash);
         // The static-fallback warning carries the raw gateway exception (an httpx
         // error, often with a URL). Keep it OUT of the visible banner — log it and
         // surface it only behind the banner's Details disclosure (fix round: a).
@@ -719,6 +723,7 @@ export function App() {
             current={current}
             parent={parentImage}
             record={currentRecord}
+            workflowsHash={workflowsHash}
             editRef={editRef ?? ""}
             mode={mode}
             dimmed={activeRendering}

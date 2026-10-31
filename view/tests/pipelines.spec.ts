@@ -1018,6 +1018,65 @@ test("the expose_as_tool toggle persists through POST /pipelines and shows the r
   expect(captured.save[1]).toEqual(spec);
 });
 
+// S9b review item 2: a SAVED pipeline can be deleted from the popover (behind a
+// confirm) → DELETE /pipelines/{id}, and the canvas returns to a fresh untitled
+// pipeline. Delete is absent for the untitled pipeline (nothing saved yet) and
+// for a read-only shipped row (Duplicate first).
+test("Delete removes the open saved pipeline and returns to a new untitled pipeline", async ({ page }) => {
+  const captured = await setup(page);
+  const spec = { ...chain2 };
+  const deletes: string[] = [];
+  // A /pipelines listing that reports the pipeline as SAVED (deletable), plus a
+  // DELETE handler that records the id and acks like the backend route.
+  await page.route("**/fixture/pipelines", (route) => {
+    if (route.request().method() === "POST") {
+      captured.save.push(route.request().postDataJSON());
+      return route.fulfill({ json: { id: route.request().postDataJSON().id, source: "saved" } });
+    }
+    return route.fulfill({ json: { pipelines: [
+      { id: spec.id, name: spec.name, source: "saved", read_only: false, spec },
+    ] } });
+  });
+  await page.route("**/fixture/pipelines/*", (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deletes.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ json: { id: spec.id, deleted: true, expose_as_tool: false } });
+  });
+  page.on("dialog", (d) => d.accept());
+
+  await openPipelines(page);
+  await openAndRefresh(page); // load the saved listing into the popover
+
+  // The untitled pipeline isn't saved yet → no Delete action.
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+
+  // Open the saved pipeline; now Delete is available.
+  await page.getByRole("option").filter({ hasText: spec.name }).click();
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await expect(page.locator(".pbx-node--op")).toHaveCount(2);
+  const del = page.getByRole("button", { name: "Delete", exact: true });
+  await expect(del).toBeVisible();
+  await del.click();
+
+  await expect.poll(() => deletes.length).toBe(1);
+  expect(deletes[0]).toContain(`/pipelines/${spec.id}`);
+  // The canvas drops back to a fresh, empty untitled pipeline.
+  await expect(page.locator(".pbx-node--op")).toHaveCount(0);
+});
+
+// A read-only shipped pipeline is never deletable — Duplicate first.
+test("a read-only pipeline shows no Delete action", async ({ page }) => {
+  const captured = await setup(page);
+  const spec = bundled[0];
+  await routeShipped(page, captured, spec, "acme-shapes");
+  await openPipelines(page);
+  await openAndRefresh(page);
+  await page.getByRole("option").filter({ hasText: spec.name }).click();
+  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+});
+
 function describedSpec(id: string): Spec {
   const spec = bundled.find((s) => s.id === id)!;
   return { ...spec, inputs: Object.fromEntries(Object.entries(spec.inputs || {}).map(([name, decl]) => [
@@ -1109,13 +1168,20 @@ for (const theme of ["light", "dark"]) {
       const pf = await panel.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }));
       expect(pf.sw, "pipeline panel scrollWidth ≤ clientWidth").toBeLessThanOrEqual(pf.cw + 1);
 
-      // The read-only badge stays within its list row.
+      // The read-only badge stays within its list row AND inside the popover
+      // panel — it must never be clipped at the popover's right edge (review
+      // item 3; the badge now wraps onto its own line under the name).
       const row = page.getByRole("option").filter({ hasText: spec.name });
       const badge = row.getByText("read-only · another-image-plugin", { exact: true });
       await expect(badge).toBeVisible();
       const rb = (await row.boundingBox())!;
       const bb = (await badge.boundingBox())!;
       expect(bb.x + bb.width).toBeLessThanOrEqual(rb.x + rb.width + 1);
+      const panelBox = (await panel.boundingBox())!;
+      expect(bb.x, "badge left inside panel").toBeGreaterThanOrEqual(panelBox.x - 1);
+      expect(bb.x + bb.width, "badge right inside panel").toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+      expect(bb.y, "badge top inside panel").toBeGreaterThanOrEqual(panelBox.y - 1);
+      expect(bb.y + bb.height, "badge bottom inside panel").toBeLessThanOrEqual(panelBox.y + panelBox.height + 1);
 
       // The popover stays inside the view.
       const view = (await page.locator(".images").boundingBox())!;

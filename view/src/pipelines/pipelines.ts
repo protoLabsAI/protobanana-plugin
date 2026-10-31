@@ -606,6 +606,16 @@ export async function savePipeline(spec: Spec): Promise<{ id: string; source: st
   return body as { id: string; source: string };
 }
 
+/** DELETE /pipelines/{id} — remove a SAVED pipeline. Resolves to the backend's
+ *  summary ({id, deleted, expose_as_tool}); throws the readable SpecError detail
+ *  for a bundled/read-only pipeline (a 400) or any other failure. */
+export async function deletePipeline(id: string): Promise<{ id: string; deleted: boolean; expose_as_tool: boolean }> {
+  const r = await apiFetch(`pipelines/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((body as { detail?: string }).detail || `delete ${r.status}`);
+  return body as { id: string; deleted: boolean; expose_as_tool: boolean };
+}
+
 /** POST /pipelines/{id}/run — returns a run_id at once (R1: nothing held open). */
 export async function runPipeline(id: string, inputs: Record<string, unknown> = {}): Promise<string> {
   const r = await apiFetch(`pipelines/${encodeURIComponent(id)}/run`, {

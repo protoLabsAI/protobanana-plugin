@@ -55,6 +55,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import time
 import uuid
 from collections import OrderedDict
@@ -455,30 +456,65 @@ def configure(registry, data_dir=None) -> None:
     """Remember the registry (save_media + event bus) and resolve the pipeline
     dirs: ``<data_dir>/pipelines`` for saved specs and ``<plugin_dir>/pipelines``
     for the shipped starters. ``data_dir`` overrides the resolved data dir (tests;
-    mirrors :func:`history.configure`)."""
+    mirrors :func:`history.configure`).
+
+    The saved-spec dir lives under the host SDK's per-instance plugin store (the
+    SAME dir history.py resolves — :func:`history._resolve_dir`), so it sits
+    OUTSIDE the plugin code dir and survives a plugin update/reinstall. The old
+    resolution fell to a dot-dir beside the code (``<plugin_dir>/.studio``), which
+    an install/update replaces — wiping every saved pipeline (the bug #38 fixed
+    for History). On first run against the store, any pre-fix
+    ``<plugin_dir>/.studio/pipelines`` specs are migrated in (copied)."""
     global _registry, _saved_dir, _bundled_dir
     _registry = registry
     _cfg.clear()
     _cfg.update({k: v for k, v in dict(getattr(registry, "config", {}) or {}).items()
                  if v is not None})
-    base = Path(data_dir) if data_dir is not None else _resolve_data_dir(registry)
-    _saved_dir = base / "pipelines"
     _bundled_dir = Path(getattr(registry, "plugin_dir", ".") or ".") / "pipelines"
+    if data_dir is not None:
+        _saved_dir = Path(data_dir) / "pipelines"
+        return
+    _saved_dir = _resolve_data_dir(registry) / "pipelines"
+    legacy_saved = history._legacy_dir(registry) / "pipelines"
+    if legacy_saved != _saved_dir:
+        _migrate_legacy_pipelines(legacy_saved, _saved_dir)
 
 
 def _resolve_data_dir(registry) -> Path:
-    """The plugin data dir — the same resolution history.py uses (a host-scoped
-    data dir if the registry exposes one, else a dot-dir beside the code)."""
-    for name in ("plugin_data_dir", "data_dir", "state_dir"):
-        val = getattr(registry, name, None)
-        if callable(val):
-            try:
-                val = val()
-            except Exception:  # noqa: BLE001
-                val = None
-        if val:
-            return Path(val)
-    return Path(getattr(registry, "plugin_dir", ".") or ".") / ".studio"
+    """The plugin data dir — resolved by the SAME shared helper history.py uses
+    (:func:`history._resolve_dir` → ``graph.sdk.plugin_store(plugin_id=...)``,
+    lazy-imported, with a logged fallback to ``<plugin_dir>/.studio`` when the SDK
+    is absent). Sharing one resolver means saved pipelines land in the host's
+    per-instance store, beside the history index, instead of a dot-dir inside the
+    code that every reinstall wipes (#38)."""
+    return history._resolve_dir(registry)
+
+
+def _migrate_legacy_pipelines(legacy: Path, store: Path) -> None:
+    """One-time COPY of pre-fix saved specs from ``<plugin_dir>/.studio/pipelines``
+    into the SDK store, so pipelines saved before the data-dir fix (#38) survive
+    the move. Copies each spec file the store doesn't already have; never moves or
+    deletes the legacy source (the copy and the delete are separate steps, so a
+    crash mid-migration can't lose a spec). Best-effort: swallows and logs, so a
+    bad migration degrades rather than breaking configure()."""
+    try:
+        if not legacy.is_dir():
+            return
+        copied = 0
+        for src in sorted(legacy.iterdir()):
+            if src.suffix.lower() not in (".yaml", ".yml", ".json") or not src.is_file():
+                continue
+            dst = store / src.name
+            if dst.exists():
+                continue
+            store.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+            copied += 1
+        if copied:
+            log.info("[protobanana] migrated %d legacy saved pipeline(s) into the "
+                     "SDK store", copied)
+    except Exception:  # noqa: BLE001 - module contract: a bad migration never breaks configure()
+        log.exception("[protobanana] legacy pipeline migration failed")
 
 
 # --------------------------------------------------------- saved / bundled I/O
@@ -710,6 +746,45 @@ def save_pipeline(spec) -> dict:
     _publish("protobanana.pipeline.saved",
              {"id": pid, "pipeline_id": pid, "source": "saved"})
     return {"id": pid, "source": "saved"}
+
+
+def delete_pipeline(pipeline_id: str) -> dict:
+    """Delete a SAVED pipeline spec from the data dir. Returns the deleted summary
+    ``{id, deleted, expose_as_tool}``.
+
+    Only a SAVED pipeline is deletable: a bundled starter lives in
+    ``<plugin_dir>/pipelines`` and another plugin's shipped (read-only) pipeline
+    isn't ours at all — neither has a saved file here, so deleting one raises
+    :class:`SpecError` (the route answers 400). A saved spec that shadows a
+    bundled starter of the same id is removed from the data dir only (never the
+    bundled file), so the starter re-appears afterwards. ``expose_as_tool`` is
+    read off the stored spec before deletion so the caller can decide whether the
+    "appears after the next agent reload" hint applies (a removed exposed pipeline
+    drops its tool on the next reload)."""
+    name = (pipeline_id or "").strip()
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise SpecError(f"invalid pipeline name {name!r}")
+    if _saved_dir is None:
+        raise SpecError("the plugin data dir is not configured, so a pipeline cannot be deleted")
+    existing = [_saved_dir / f"{name}{ext}" for ext in (".yaml", ".yml", ".json")]
+    existing = [p for p in existing if p.is_file()]
+    if not existing:
+        raise SpecError(f"pipeline {name!r} is read-only; only saved pipelines can be deleted")
+    exposed = False
+    try:
+        spec = _load_text_spec(existing[0].read_text(encoding="utf-8"))
+        exposed = bool(spec.get("expose_as_tool"))
+    except Exception:  # noqa: BLE001 - a bad spec still deletes; the flag just defaults off
+        pass
+    try:
+        for path in existing:
+            path.unlink()
+    except Exception as exc:  # noqa: BLE001
+        raise SpecError(f"could not delete pipeline {name!r}: {exc}")
+    # Announce the delete so a live Studio view can refresh its listing (design §4).
+    _publish("protobanana.pipeline.deleted",
+             {"id": name, "pipeline_id": name, "source": "saved"})
+    return {"id": name, "deleted": True, "expose_as_tool": exposed}
 
 
 def _pipeline_tool(spec):

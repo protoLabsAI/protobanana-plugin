@@ -60,6 +60,8 @@ import {
   REF_PORTS,
   autoLayout,
   connectionAllowed,
+  deleteLocalSpec,
+  deletePipeline,
   duplicateId,
   getLastOpen,
   graphToSpec,
@@ -744,6 +746,30 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     if (await persistSpec(copy, "Duplicated — now editable")) openSpec(copy);
   }, [currentSpec, meta, pipelines, persistSpec, openSpec]);
 
+  // Delete (card S9b review): remove the OPEN saved pipeline through DELETE
+  // /pipelines/{id}, behind a confirm, then return the canvas to a fresh untitled
+  // pipeline. Only a saved pipeline is deletable — a read-only shipped one has no
+  // Delete, and a bundled starter 400s on the backend — so a Duplicate or a
+  // mistaken Save can always be undone. If it was exposed as an agent tool, the
+  // tool drops on the next agent reload (the reload hint applies).
+  const doDelete = useCallback(async () => {
+    const open = pipelines.find((p) => p.id === meta.id && p.source === "saved" && !p.read_only);
+    if (!open) return;
+    if (!window.confirm(`Delete “${meta.name}”? This can’t be undone.`)) return;
+    try {
+      const res = await deletePipeline(meta.id);
+      deleteLocalSpec(meta.id);
+      setPipelines(await listPipelines().catch(() => pipelines.filter((p) => p.id !== meta.id)));
+      toast(res.expose_as_tool
+        ? "Pipeline deleted — the agent tool is removed after the next reload."
+        : "Pipeline deleted");
+      doNew();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      toast("Could not delete — see the error");
+    }
+  }, [pipelines, meta, toast, doNew]);
+
   // Commit the flag to local state only after the backend accepts it.
   const [exposureSaving, setExposureSaving] = useState(false);
   const setExposeAsTool = useCallback(async (on: boolean) => {
@@ -921,6 +947,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const selectedEntry = selectedNode?.data.kind === "op" ? catalog?.find((e) => e.op === (selectedNode.data as OpNodeData).op) : undefined;
   const selectedRun = selectedId ? runNodes[selectedId] : undefined;
   const running = runStatus === "running";
+  // The open pipeline is a deletable SAVED one when it is listed with source
+  // "saved" (a Duplicate or a prior Save) — a bundled starter or a brand-new
+  // untitled pipeline has nothing to delete, and a read-only row hides Delete.
+  const openSaved = pipelines.some((p) => p.id === meta.id && p.source === "saved" && !p.read_only);
 
   const addNodeMenu = (
     <Menu open={addOpen} onOpenChange={setAddOpen} label="Add node" align="start" side="bottom"
@@ -956,6 +986,9 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
               persist it (card S9b). */}
           {!readOnly && <Button size="xs" variant="ghost" onClick={doSave}>Save</Button>}
           <Button size="xs" variant="ghost" onClick={doDuplicate}>Duplicate</Button>
+          {/* Delete the open SAVED pipeline (card S9b review): never on a read-only
+              shipped row, only once there is a saved spec to remove. */}
+          {!readOnly && openSaved && <Button size="xs" variant="ghost" className="pbx-pipeline-delete" onClick={doDelete}>Delete</Button>}
           <Button size="xs" variant="ghost" onClick={doExport}>Export file</Button>
           <Button size="xs" variant="ghost" onClick={() => fileInput.current?.click()}>Import file</Button>
           <Button size="xs" variant="ghost" disabled={readOnly} onClick={doAutoLayout}>Auto-layout</Button>

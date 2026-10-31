@@ -12,6 +12,7 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
 - ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
 - ``/api/plugins/protobanana/pipelines``        GET saved + starter pipelines; POST save one (gated)
+- ``/api/plugins/protobanana/pipelines/<id>``   DELETE a saved pipeline (400 if read-only) (gated)
 - ``/api/plugins/protobanana/pipelines/<id>/run``  POST a run, returns a run_id at once (gated)
 - ``/api/plugins/protobanana/runs/<id>``        GET one run's per-node state (gated)
 
@@ -203,6 +204,16 @@ def build_router(registry):
         error (cycle / unknown op / dangling ref / port type mismatch) on reject."""
         try:
             return pipelines.save_pipeline(spec)
+        except pipelines.SpecError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.delete(f"{_API}/pipelines/{{pipeline_id}}")
+    async def delete_pipeline_route(pipeline_id: str):  # noqa: ANN202
+        """Delete a SAVED pipeline. A 400 for a bundled or another plugin's
+        read-only pipeline (there is no saved spec to remove), so a Duplicate or a
+        mistaken Save can be removed but a shipped starter can't."""
+        try:
+            return pipelines.delete_pipeline(pipeline_id)
         except pipelines.SpecError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

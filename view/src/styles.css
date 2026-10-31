@@ -1898,11 +1898,14 @@ fieldset {
   overflow: auto;
 }
 
+/* The row STACKS the "read-only · <source>" badge under the name (card S9b
+ * review item 3): side-by-side, a long source clipped at the popover's right
+ * edge; a column gives the badge the full row width so it is never cut off. */
 .pbx-pipeline-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   padding: 6px 8px;
   text-align: left;
   color: var(--fg);
@@ -1916,8 +1919,8 @@ fieldset {
   background: var(--bg-hover);
 }
 
-/* The name truncates so a long "read-only · <source>" badge always fits the row
- * inside the popover column (card S9b rule 2 — no badge overflow). */
+/* The name truncates (full row width) so it can't push the row wider than the
+ * popover column (card S9b rule 2 — no overflow). */
 .pbx-pipeline-item > span {
   min-width: 0;
   overflow: hidden;
@@ -1925,8 +1928,13 @@ fieldset {
   white-space: nowrap;
 }
 
+/* On its own line, left-aligned, only as wide as its text and never past the
+ * row — so the badge stays inside the popover panel at every width. */
 .pbx-ro-badge {
-  flex: 0 0 auto;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 9px;
 }
 

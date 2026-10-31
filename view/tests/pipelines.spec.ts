@@ -562,6 +562,35 @@ const records = ["root"].map((id) => ({
 
 const viewBar = (page: Page) => page.getByRole("toolbar", { name: "View controls", exact: true });
 
+for (const width of [1440, 760]) {
+  for (const source of ["history", "focus"] as const) {
+    test(`${source} selection from Pipelines shows Playground at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await setup(page, { history: records });
+      await openPipelines(page);
+      if (width < 780) await page.getByRole("button", { name: "History", exact: true }).click();
+      if (source === "history") {
+        await page.locator(".g-thumb").first().click();
+      } else {
+        await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "root" }, location.origin));
+      }
+      await expect(page.getByRole("tab", { name: "Playground", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByAltText("Current image", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.locator(".pbx-graph-stage")).toBeHidden();
+    });
+  }
+}
+
+test("an unknown focus from Pipelines shows the Playground error", async ({ page }) => {
+  await setup(page);
+  await openPipelines(page);
+  await page.evaluate(() => window.postMessage({ type: "protobanana:focus", focus: "missing" }, location.origin));
+  await expect(page.getByRole("tab", { name: "Playground", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".focus-error")).toContainText("Image missing is not in Studio history");
+});
+
 async function roundTrip(page: Page) {
   // Select a History image on Playground, round-trip to Pipelines and back.
   await page.locator(".g-thumb").first().click();

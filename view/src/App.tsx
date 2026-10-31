@@ -435,6 +435,8 @@ export function App() {
 
   useEffect(() => {
     if (!focus) return;
+    setTab("playground");
+    setDrawerOpen(false);
     let alive = true;
     ready().then(reload).then(all => {
       if (!alive) return;
@@ -514,6 +516,7 @@ export function App() {
   };
 
   const pickRecord = (rec: HistoryRecord) => {
+    setTab("playground");
     setResult(undefined);
     setUpload(undefined);
     setPrunedSelected(rec.pruned);

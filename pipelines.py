@@ -631,8 +631,8 @@ def load_pipeline(name: str, config=None) -> dict:
 def list_pipelines(config=None) -> list[dict]:
     """Every pipeline known to the plugin — those shipped by other enabled plugins,
     this plugin's own bundled starters, and any saved in the data dir — as
-    ``{id, name, description, source, read_only, expose_as_tool, inputs, steps}``
-    summaries. ``source`` is the owning plugin id for another plugin's pipelines
+    ``{id, name, description, source, read_only, expose_as_tool, inputs, steps, spec}``
+    entries. The full ``spec`` lets the canvas open bundled and remote graphs. ``source`` is the owning plugin id for another plugin's pipelines
     (``read_only`` True) and ``"bundled"`` / ``"saved"`` for this plugin's own
     (``read_only`` False). Precedence runs other-plugin < bundled < saved: a local
     bundled starter or a saved spec shadows another plugin's pipeline of the same
@@ -646,7 +646,7 @@ def list_pipelines(config=None) -> list[dict]:
             found[pid] = {
                 "id": pid, "name": spec.get("name") or pid,
                 "description": spec.get("description", ""),
-                "source": source, "read_only": True,
+                "source": source, "read_only": True, "spec": spec,
                 "inputs": spec.get("inputs") or {},
                 "steps": [s["id"] for s in spec["steps"]],
                 "expose_as_tool": spec.get("expose_as_tool", False),
@@ -672,6 +672,7 @@ def list_pipelines(config=None) -> list[dict]:
                 "description": spec.get("description", ""),
                 "source": source,  # "saved" overwrites "bundled" (listed last)
                 "read_only": False,
+                "spec": spec,
                 "expose_as_tool": spec.get("expose_as_tool", False),
                 "inputs": spec.get("inputs") or {},
                 "steps": [s.get("id") for s in (spec.get("steps") or [])],

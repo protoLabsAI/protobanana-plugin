@@ -18,6 +18,7 @@ import { Composer, type Margins } from "./Composer";
 import { Lineage } from "./Lineage";
 import { Gallery } from "./Gallery";
 import { StageView } from "./StageView";
+import { PipelinesCanvas } from "./pipelines/Canvas";
 import {
   Badge,
   Banner,
@@ -318,6 +319,18 @@ export function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // The header tabs (design §9 / redesign §5): switching swaps ONLY the body.
+  // The Playground subtree stays MOUNTED (hidden) so its current image, zoom/pan
+  // and edit mode survive a round trip to Pipelines. Pipelines mounts lazily on
+  // first visit, then stays mounted too.
+  const [tab, setTab] = useState<"playground" | "pipelines">("playground");
+  const [pipelinesSeen, setPipelinesSeen] = useState(false);
+  const selectTab = useCallback((id: string) => {
+    const next = id === "pipelines" ? "pipelines" : "playground";
+    setTab(next);
+    if (next === "pipelines") setPipelinesSeen(true);
+  }, []);
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
@@ -422,6 +435,8 @@ export function App() {
 
   useEffect(() => {
     if (!focus) return;
+    setTab("playground");
+    setDrawerOpen(false);
     let alive = true;
     ready().then(reload).then(all => {
       if (!alive) return;
@@ -460,7 +475,7 @@ export function App() {
 
   // Esc leaves the active mode (design §4.3 / §10).
   const onRootKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" && mode !== null) leaveMode();
+    if (e.key === "Escape" && tab === "playground" && mode !== null) leaveMode();
   };
 
   const submit = useCallback((req: JobRequest) => {
@@ -501,6 +516,7 @@ export function App() {
   };
 
   const pickRecord = (rec: HistoryRecord) => {
+    setTab("playground");
     setResult(undefined);
     setUpload(undefined);
     setPrunedSelected(rec.pruned);
@@ -509,6 +525,33 @@ export function App() {
     leaveMode();
     setDrawerOpen(false);
   };
+
+  // "Open in Playground" on a node output (design §9): make that media the
+  // Playground's current image and switch tabs. The record may not be in the
+  // shared index yet (a just-produced node output), so synthesise one.
+  const openInPlayground = useCallback((mediaId: string) => {
+    setTab("playground");
+    setResult(undefined);
+    setUpload(undefined);
+    setPrunedSelected(false);
+    setFocusError("");
+    leaveMode();
+    const rec = lineageRecords.find((r) => r.media_id === mediaId);
+    setSelected(rec || {
+      media_id: mediaId, parent_id: null, op: "pipeline", alias: null, params: {},
+      source: "pipeline", job_id: null, created: Date.now() / 1000, starred: false, pruned: false,
+    });
+    setFocusSignal((s) => s + 1);
+  }, [lineageRecords, leaveMode]);
+
+  // Node outputs are history records, so a pipeline run joins History on its bus
+  // events (design §9). Bump `revision` so the Gallery + lineage index re-fetch.
+  const refreshHistory = useCallback(() => setRevision((v) => v + 1), []);
+  useEffect(() => {
+    const offNode = subscribe("protobanana.pipeline.node.done", refreshHistory);
+    const offRun = subscribe("protobanana.pipeline.run.done", refreshHistory);
+    return () => { offNode(); offRun(); };
+  }, [refreshHistory]);
 
   // Load an uploaded / dropped / pasted image as the current input (§4.1).
   const loadFile = useCallback((file?: File | null) => {
@@ -617,10 +660,11 @@ export function App() {
       >
         <Tabs
           ariaLabel="View mode"
-          value="playground"
+          value={tab}
+          onChange={selectTab}
           items={[
             { id: "playground", label: "Playground" },
-            { id: "pipelines", label: "Pipelines", disabled: true, title: "Coming soon" },
+            { id: "pipelines", label: "Pipelines" },
           ]}
         />
       </PanelHeader>
@@ -628,6 +672,8 @@ export function App() {
       <div className="images-body">
         <main
           className="canvas"
+          style={tab === "pipelines" ? { display: "none" } : undefined}
+          aria-hidden={tab === "pipelines" || undefined}
           onDragOver={(e) => { e.preventDefault(); }}
           onDrop={(e) => { e.preventDefault(); loadFile(e.dataTransfer.files?.[0]); }}
           onPaste={(e) => { const f = e.clipboardData?.files?.[0]; if (f) { e.preventDefault(); loadFile(f); } }}
@@ -735,6 +781,19 @@ export function App() {
             onSubmit={submit}
           />
         </main>
+
+        {/* Pipelines body (design §9): the canvas becomes an xyflow graph and the
+            composer becomes the node inspector. Mounted lazily on first visit,
+            then kept so switching back to it is instant; History stays shared in
+            the right column below. */}
+        {pipelinesSeen && (
+          <PipelinesCanvas
+            catalog={catalog}
+            hidden={tab !== "pipelines"}
+            onOpenInPlayground={openInPlayground}
+            onHistoryChanged={refreshHistory}
+          />
+        )}
 
         {!narrow && <aside className="history-col">{gallery}</aside>}
       </div>

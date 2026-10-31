@@ -35,6 +35,13 @@
   --info: var(--pl-color-status-info, #4f87d6);
   --radius: var(--pl-radius-md, 10px);
   --gap: 12px;
+  /* Typed pipeline-port colours (S8). Derived from themed tokens so they track
+   * light/dark; NONE is orange (house style §1.5). */
+  --pbx-port-image: var(--accent);
+  --pbx-port-mask: var(--pl-color-brand-lavender, #b09cf0);
+  --pbx-port-text: var(--info);
+  --pbx-port-seed: var(--success);
+  --pbx-port-int: var(--pl-color-brand-indigo-bright, #8f93f5);
 }
 
 [data-theme="light"] {
@@ -1285,9 +1292,9 @@ body {
 
 .pbx-toasts {
   position: fixed;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 16px;
+  right: 16px;
+  max-width: calc(100vw - 32px);
   z-index: 80;
   display: grid;
   gap: 8px;
@@ -1606,4 +1613,322 @@ fieldset {
 .gallery > *, .g-head .pbx-panel-header-text { min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ======================================================================== */
+/* Pipelines tab (Studio S8 / redesign §9): an xyflow graph in the canvas,   */
+/* the composer slot turned node inspector. pbx-* namespace only — never     */
+/* pl-* (owned by /_ds/plugin-kit.css); every colour is a --pl-* token.      */
+/* ======================================================================== */
+
+/* The pipelines body reuses .canvas but owns its own scrolling: the stage
+ * clips (xyflow pans/zooms internally) so the column never overflows (r7). */
+.pbx-pipelines {
+  overflow: hidden;
+}
+
+.pbx-graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.pbx-graph-name {
+  min-width: 0;
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The graph stage: a flat inset surface (no checkerboard — that is for images)
+ * with xyflow filling it absolutely. */
+.pbx-graph-stage {
+  flex: 1;
+  background: var(--bg-inset);
+}
+
+.pbx-flow {
+  position: absolute;
+  inset: 0;
+}
+
+.pbx-flow .react-flow {
+  background: transparent;
+}
+
+.pbx-flow .react-flow__attribution {
+  display: none;
+}
+
+.pbx-flow .react-flow__edge-path {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.pbx-flow .react-flow__edge.selected .react-flow__edge-path,
+.pbx-flow .react-flow__connection-path {
+  stroke: var(--accent);
+}
+
+.pbx-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+/* ---- nodes -------------------------------------------------------------- */
+
+.pbx-node {
+  position: relative;
+  width: 240px;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 12px;
+  box-shadow: 0 1px 3px var(--overlay);
+}
+
+.pbx-node--input {
+  width: 240px;
+}
+
+.pbx-node.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.pbx-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.pbx-node-title {
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pbx-node-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.pbx-node-dot.is-done {
+  background: var(--success);
+}
+
+.pbx-node-dot.is-failed {
+  background: var(--danger);
+}
+
+.pbx-node-thumb {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  border-radius: calc(var(--radius) - 3px);
+  background: var(--bg-inset);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.pbx-node-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pbx-node-thumb-empty {
+  width: 100%;
+  height: 100%;
+}
+
+.pbx-node-cached {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  font-size: 9px;
+}
+
+.pbx-node-rerun {
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+}
+
+.pbx-node-rerun:hover {
+  background: var(--bg-hover);
+}
+
+.pbx-node-ports {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.pbx-port-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+  padding-left: 8px;
+}
+
+.pbx-port-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pbx-port-out-label {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ---- typed ports (handles) --------------------------------------------- */
+
+.pbx-port.react-flow__handle,
+.pbx-port {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--bg-raised);
+  border-radius: 50%;
+}
+
+/* Raised specificity (…__handle.pbx-port--x) so the typed colour wins over
+ * xyflow's base .react-flow__handle regardless of CSS bundle order. */
+.react-flow__handle.pbx-port--image { background: var(--pbx-port-image); }
+.react-flow__handle.pbx-port--mask { background: var(--pbx-port-mask); }
+.react-flow__handle.pbx-port--text { background: var(--pbx-port-text); }
+.react-flow__handle.pbx-port--seed { background: var(--pbx-port-seed); }
+.react-flow__handle.pbx-port--int { background: var(--pbx-port-int); }
+
+.pbx-type-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ---- node inspector (the composer slot) -------------------------------- */
+
+.pbx-inspector-kind {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.pbx-inspector--empty {
+  place-items: center;
+  min-height: 92px;
+}
+
+.pbx-inspector-empty {
+  padding: 12px;
+}
+
+/* The inspector packs options + node actions + the primary button; let the row
+ * wrap so it never forces a horizontal overflow of the inspector column (r7). */
+.pbx-inspector .composer-actions {
+  flex-wrap: wrap;
+}
+
+.pbx-node-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pbx-node-delete {
+  color: var(--danger);
+}
+
+.pbx-promote {
+  display: grid;
+  gap: 6px;
+}
+
+/* ---- pipeline menu popover --------------------------------------------- */
+
+.pbx-pipeline-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 280px;
+}
+
+.pbx-pipeline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pbx-pipeline-list {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.pbx-pipeline-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.pbx-pipeline-item:hover {
+  background: var(--bg-hover);
+}
+
+.pbx-ro-badge {
+  font-size: 9px;
+}
+
+.pbx-inspector-slot { margin: 0; padding: 0; border: 0; min-width: 0; flex: 0 0 auto; }
+.pbx-inspector--empty { min-height: 150px; }
+
+/* xyflow's built-in input class also matches our custom typed input renderer. */
+.pbx-flow .react-flow__node-input {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  box-shadow: none;
 }

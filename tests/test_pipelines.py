@@ -619,3 +619,14 @@ def test_pipelines_list_and_save_routes(tmp_path):
             assert saved["saved-one"]["source"] == "saved"
 
     asyncio.run(scenario())
+
+
+def test_list_includes_full_editable_starter_specs(tmp_path):
+    mod, _ = _load(tmp_path)
+    starters = [p for p in mod.pipelines.list_pipelines() if p["source"] == "bundled"]
+    assert len(starters) == 3
+    for item in starters:
+        spec = item["spec"]
+        assert spec == mod.pipelines.load_pipeline(item["id"])
+        assert len(spec["steps"]) + len(spec.get("inputs", {})) >= 2
+        mod.pipelines.validate(spec)

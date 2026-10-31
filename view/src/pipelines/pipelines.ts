@@ -458,6 +458,17 @@ export function slugifyId(name: string): string {
   return s || "pipeline";
 }
 
+/** A fresh id for a Duplicate (S9b): `<base>-copy`, then `<base>-copy-2`, … so a
+ *  copy of a read-only (or any) pipeline never collides with an id already in the
+ *  listing. Always a valid spec id (slugified, matches `^[a-z0-9][a-z0-9_-]*$`). */
+export function duplicateId(baseId: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  let id = slugifyId(`${baseId}-copy`);
+  let i = 2;
+  while (used.has(id)) id = slugifyId(`${baseId}-copy-${i++}`);
+  return id;
+}
+
 /** Parse an imported spec file into a Spec. The import picker offers .json AND
  *  .yaml/.yml (the formats the backend `_load_text_spec` reads); JSON is a
  *  subset of YAML, so one YAML parse handles both the canvas's own .json export

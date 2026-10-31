@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CatalogEntry } from "../src/api";
 import {
   connectionAllowed,
+  duplicateId,
   graphToSpec,
   inputNodeId,
   makeOpNode,
@@ -242,6 +243,16 @@ test("a canvas-saved spec passes the real pipelines.validate; an image→text sp
   });
   expect(bad.ok).toBe(false);
   expect(bad.error).toMatch(/mismatch|text parameter/i);
+});
+
+// S9b: a Duplicate id is `<base>-copy`, deduped with a counter against the ids
+// already listed, and always a valid spec id.
+test("duplicateId derives a fresh, valid, non-colliding copy id", () => {
+  expect(duplicateId("product-sticker", [])).toBe("product-sticker-copy");
+  expect(duplicateId("product-sticker", ["product-sticker", "product-sticker-copy"]))
+    .toBe("product-sticker-copy-2");
+  // The result matches the spec id pattern ^[a-z0-9][a-z0-9_-]*$.
+  expect(duplicateId("Weird Name!", [])).toMatch(/^[a-z0-9][a-z0-9_-]*$/);
 });
 
 // R6: the pl- class scan (the same guard as playground.spec's pbx test), now
@@ -856,3 +867,222 @@ test("read-only pipelines open for inspection and become editable through Duplic
   await expect(page.getByRole("button", { name: "Add node", exact: true })).toBeEnabled();
   await expect(page.getByText("Read-only", { exact: true })).toHaveCount(0);
 });
+
+// ================================================================ S9b: read-only shipped pipelines
+
+// A /pipelines route that lists ONE pipeline shipped by another plugin (`source`,
+// read_only true) and records every POST save, returning the backend's save ack
+// {id, source:"saved"}. Mirrors pipelines.list_pipelines / POST /pipelines.
+async function routeShipped(page: Page, captured: SetupResult, spec: Spec, source: string) {
+  await page.route("**/fixture/pipelines", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      captured.save.push(body);
+      return route.fulfill({ json: { id: body.id, source: "saved" } });
+    }
+    return route.fulfill({ json: { pipelines: [
+      { id: spec.id, name: spec.name, source, read_only: true, spec },
+    ] } });
+  });
+}
+
+// Open the Pipeline popover and refresh the listing through Save (the canvas may
+// have mounted before the per-test route override took effect).
+async function openAndRefresh(page: Page) {
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+}
+
+// r1: the pipeline popover names the owning plugin on a read-only row.
+test("a read-only pipeline is listed with a 'read-only · <source>' badge naming the plugin", async ({ page }) => {
+  const captured = await setup(page);
+  const spec = bundled[0];
+  await routeShipped(page, captured, spec, "acme-shapes");
+  await openPipelines(page);
+  await openAndRefresh(page);
+  const row = page.getByRole("option").filter({ hasText: spec.name });
+  await expect(row).toBeVisible();
+  await expect(row.getByText("read-only · acme-shapes", { exact: true })).toBeVisible();
+});
+
+// r2: a read-only canvas refuses a drag, a connect and a delete, and can still run
+// — running goes straight to POST /pipelines/{id}/run with NO save (Save is gone).
+test("a read-only canvas refuses a drag, a connect and a delete, and can still run", async ({ page }) => {
+  const captured = await setup(page);
+  const spec = bundled.find((s) => s.id === "product-sticker")!;
+  await routeShipped(page, captured, spec, "acme-shapes");
+  await openPipelines(page);
+  await openAndRefresh(page);
+  await page.getByRole("option").filter({ hasText: spec.name }).click();
+  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+
+  const nodeCount = spec.steps.length + Object.keys(spec.inputs || {}).length;
+  await expect(page.locator(".react-flow__node")).toHaveCount(nodeCount);
+  const savesAfterLoad = captured.save.length; // only the earlier refresh Save
+
+  // Refuses a drag: the node's flow-coordinate transform is unchanged.
+  const gen = page.locator(".react-flow__node").filter({ hasText: "Generate" }).first();
+  await expect(gen).toBeVisible();
+  const transform = () => gen.evaluate((el) => (el as HTMLElement).style.transform);
+  const before = await transform();
+  const gb = (await gen.boundingBox())!;
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(gb.x + gb.width / 2 + 140, gb.y + 120, { steps: 8 });
+  await page.mouse.up();
+  expect(await transform()).toBe(before);
+
+  // Refuses a connect: handles carry no connectable affordance, and a handle-to-
+  // handle drag adds no edge.
+  await expect(page.locator(".react-flow__handle.connectable")).toHaveCount(0);
+  const edgesBefore = await page.locator(".react-flow__edge").count();
+  expect(edgesBefore).toBeGreaterThanOrEqual(1);
+  const out = page.locator(".react-flow__handle.source").first();
+  const inp = page.locator(".react-flow__handle.target").first();
+  const ob = (await out.boundingBox())!;
+  const ib = (await inp.boundingBox())!;
+  await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(ib.x + ib.width / 2, ib.y + ib.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(edgesBefore);
+
+  // Refuses a delete: Delete / Backspace on a selected node removes nothing.
+  await gen.click();
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".react-flow__node")).toHaveCount(nodeCount);
+
+  // Can run: the inspector's primary action runs the pipeline by its own id,
+  // without a Save (a read-only pipeline already lives on the backend).
+  await gen.click();
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect.poll(() => captured.run.length).toBe(1);
+  expect(captured.run[0].id).toBe(spec.id);
+  expect(captured.save.length).toBe(savesAfterLoad);
+});
+
+// r3: Duplicate POSTs an editable copy under a NEW id, opens it editable, and the
+// copy saves and runs under that new id.
+test("Duplicate POSTs an editable copy under a new id that saves and runs", async ({ page }) => {
+  const captured = await setup(page);
+  const spec = bundled.find((s) => s.id === "outpaint-banner")!;
+  await routeShipped(page, captured, spec, "acme-shapes");
+  await openPipelines(page);
+  await openAndRefresh(page);
+  await page.getByRole("option").filter({ hasText: spec.name }).click();
+  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  const savesBeforeDup = captured.save.length;
+
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click();
+  // The copy opens editable.
+  await expect(page.getByRole("button", { name: "Add node", exact: true })).toBeEnabled();
+  await expect(page.getByText("Read-only", { exact: true })).toHaveCount(0);
+
+  // It was POSTed under a fresh id, and that spec is valid against the backend.
+  await expect.poll(() => captured.save.length).toBe(savesBeforeDup + 1);
+  const copy = captured.save[captured.save.length - 1] as unknown as Spec;
+  expect(copy.id).toBe(`${spec.id}-copy`);
+  expect(copy.id).not.toBe(spec.id);
+  expect(validateSpec(copy)).toEqual({ ok: true, error: "" });
+
+  // The editable copy runs under its new id (Save-then-run).
+  await page.locator(".react-flow__node").filter({ has: page.locator(".pbx-node--op") }).first().click();
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect.poll(() => captured.run.length).toBe(1);
+  expect(captured.run[0].id).toBe(copy.id);
+});
+
+// r4: the expose_as_tool toggle persists through POST /pipelines, shows the reload
+// hint, and is absent on read-only pipelines.
+test("the expose_as_tool toggle persists through POST /pipelines and shows the reload hint", async ({ page }) => {
+  const captured = await setup(page, { seed: chain2 });
+  await openPipelines(page);
+  await expect(page.locator(".pbx-node--op")).toHaveCount(2);
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await expect(page.getByText("The tool appears after the next agent reload.", { exact: true })).toBeVisible();
+
+  const toggle = page.getByRole("switch", { name: "Expose as agent tool", exact: true });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => captured.save.length).toBe(1);
+  expect((captured.save[0] as unknown as Spec).expose_as_tool).toBe(true);
+  expect(validateSpec(captured.save[0] as unknown as Spec)).toEqual({ ok: true, error: "" });
+
+  // Toggling back off round-trips the cleared flag.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect.poll(() => captured.save.length).toBe(2);
+  expect(Boolean((captured.save[1] as unknown as Spec).expose_as_tool)).toBe(false);
+});
+
+// r5: with the vendored kit CSS, the read-only badge and the expose Switch fit the
+// popover and its column, and read-only adds no stage scrollbars — at 1440 and 760,
+// light and dark.
+for (const theme of ["light", "dark"]) {
+  for (const width of [1440, 760]) {
+    test(`S9b ${theme} @ ${width}px: read-only badge + expose Switch fit the popover, stage has no scrollbars`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const captured = await setup(page, { theme });
+      const spec = bundled.find((s) => s.id === "product-sticker")!;
+      await routeShipped(page, captured, spec, "another-image-plugin");
+      await openPipelines(page);
+      await openAndRefresh(page);
+
+      // The current (untitled) pipeline is editable → the expose Switch + hint show.
+      await expect(page.getByRole("switch", { name: "Expose as agent tool", exact: true })).toBeVisible();
+      await expect(page.getByText("The tool appears after the next agent reload.", { exact: true })).toBeVisible();
+
+      // The popover panel does not overflow its own width.
+      const panel = page.locator(".pbx-pipeline-panel");
+      const pf = await panel.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }));
+      expect(pf.sw, "pipeline panel scrollWidth ≤ clientWidth").toBeLessThanOrEqual(pf.cw + 1);
+
+      // The read-only badge stays within its list row.
+      const row = page.getByRole("option").filter({ hasText: spec.name });
+      const badge = row.getByText("read-only · another-image-plugin", { exact: true });
+      await expect(badge).toBeVisible();
+      const rb = (await row.boundingBox())!;
+      const bb = (await badge.boundingBox())!;
+      expect(bb.x + bb.width).toBeLessThanOrEqual(rb.x + rb.width + 1);
+
+      // The popover stays inside the view.
+      const view = (await page.locator(".images").boundingBox())!;
+      const pb = (await panel.boundingBox())!;
+      expect(pb.x).toBeGreaterThanOrEqual(view.x - 1);
+      expect(pb.x + pb.width).toBeLessThanOrEqual(view.x + view.width + 1);
+
+      // Loaded read-only, the stage shows no scrollbars.
+      await row.click();
+      await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+      const stage = await page.locator(".pbx-graph-stage").evaluate((el) => ({
+        sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight,
+      }));
+      expect(stage.sw).toBe(stage.cw);
+      expect(stage.sh).toBe(stage.ch);
+    });
+  }
+}
+
+// S9b PR screenshots (light / dark). Shot with an EDITABLE pipeline loaded (its
+// graph behind) and the Pipeline popover open, so one frame carries both new
+// pieces: the editable-only "Expose as agent tool" Switch + reload hint, and a
+// read-only shipped row with its "read-only · <source>" badge in the list.
+// Committed under docs/screenshots/images-s9b/.
+const shipped = bundled.find((s) => s.id === "product-sticker")!;
+for (const theme of ["light", "dark"] as const) {
+  test(`screenshot: pipelines read-only + expose ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const captured = await setup(page, { theme, seed: chain2 });
+    await routeShipped(page, captured, shipped, "shapes-plugin");
+    await openPipelines(page);
+    await expect(page.locator(".pbx-node--op")).toHaveCount(2);
+    await openAndRefresh(page);
+    await expect(page.getByRole("switch", { name: "Expose as agent tool", exact: true })).toBeVisible();
+    await expect(page.getByRole("option").filter({ hasText: shipped.name })
+      .getByText("read-only · shapes-plugin", { exact: true })).toBeVisible();
+    mkdirSync("../docs/screenshots/images-s9b", { recursive: true });
+    await page.screenshot({ path: `../docs/screenshots/images-s9b/${theme}.png`, fullPage: true });
+  });
+}

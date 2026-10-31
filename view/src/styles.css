@@ -1916,12 +1916,30 @@ fieldset {
   background: var(--bg-hover);
 }
 
+/* The name truncates so a long "read-only · <source>" badge always fits the row
+ * inside the popover column (card S9b rule 2 — no badge overflow). */
+.pbx-pipeline-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pbx-ro-badge {
+  flex: 0 0 auto;
   font-size: 9px;
 }
 
 .pbx-inspector-slot { margin: 0; padding: 0; border: 0; min-width: 0; flex: 0 0 auto; }
 .pbx-inspector--empty { min-height: 150px; }
+
+/* A borderless fieldset: it disables a whole param block at once (read-only
+ * pipelines, S9b) — including the Segmented/Switch stand-ins that don't take a
+ * `disabled` prop — without the browser's default fieldset chrome. */
+.pbx-inspector-fields { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+
+/* The expose-as-tool toggle and its reload hint in the pipeline popover (S9b). */
+.pbx-expose { display: grid; gap: 4px; }
 
 /* xyflow's built-in input class also matches our custom typed input renderer. */
 .pbx-flow .react-flow__node-input {

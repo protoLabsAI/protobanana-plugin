@@ -1965,9 +1965,13 @@ fieldset {
  * inside the view at 1440 and 760 (min() caps it to the viewport). overflow is
  * hidden so the graph owns its own pan/zoom and never shows a scrollbar. */
 .pbx-wf-drawer {
-  width: min(560px, 92vw);
+  width: min(720px, 50vw);
   overflow: hidden;
   display: flex;
+}
+
+@media (max-width: 779px) {
+  .pbx-wf-drawer { width: 100vw; }
 }
 
 .pbx-wf {
@@ -1990,6 +1994,14 @@ fieldset {
 }
 
 .pbx-wf-head-main { min-width: 0; }
+
+.pbx-wf-head .pbx-tooltip {
+  top: calc(100% + 6px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+  transform: none;
+}
 
 .pbx-wf-kicker {
   font-size: 11px;
@@ -2071,7 +2083,7 @@ fieldset {
 .pbx-wf-node {
   position: relative;
   box-sizing: border-box;
-  width: 180px;
+  width: 250px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2092,22 +2104,21 @@ fieldset {
 
 .pbx-wf-node-title {
   display: block;
+  font-size: 18px;
   font-weight: 600;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .pbx-wf-slot-tag {
   display: block;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--accent);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* Read-only handles: visible as link anchors but not grabbable. */

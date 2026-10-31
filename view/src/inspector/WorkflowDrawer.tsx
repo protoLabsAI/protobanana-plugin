@@ -37,7 +37,7 @@ function WfNode({ data }: NodeProps) {
       data-node-id={d.nodeId}
       data-slot={d.isSlot ? "true" : "false"}
     >
-      <Handle type="target" position={Position.Left} className="pbx-wf-handle" isConnectable={false} />
+      <Handle type="target" position={Position.Top} className="pbx-wf-handle" isConnectable={false} />
       <span className="pbx-wf-node-title">{d.label}</span>
       {d.isSlot && (
         // A LABEL, not just a colour, so the slot cue survives for colour-blind
@@ -46,7 +46,7 @@ function WfNode({ data }: NodeProps) {
           slot{d.slotInputs.length ? `: ${d.slotInputs.join(", ")}` : ""}
         </span>
       )}
-      <Handle type="source" position={Position.Right} className="pbx-wf-handle" isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} className="pbx-wf-handle" isConnectable={false} />
     </div>
   );
 }
@@ -66,7 +66,7 @@ function WorkflowToolbar() {
         <Button size="xs" icon variant="ghost" aria-label="Zoom in" onClick={() => flow.zoomIn()}><ZoomInIcon /></Button>
       </Tooltip>
       <Tooltip label="Fit to view">
-        <Button size="xs" icon variant="ghost" aria-label="Fit workflow to view" onClick={() => flow.fitView({ padding: 0.15, maxZoom: 1 })}><FitIcon /></Button>
+        <Button size="xs" icon variant="ghost" aria-label="Fit workflow to view" onClick={() => flow.fitView({ padding: 0.15, minZoom: 0.7, maxZoom: 1 })}><FitIcon /></Button>
       </Tooltip>
     </div>
   );
@@ -86,10 +86,10 @@ function WorkflowGraph({ payload }: { payload: WorkflowPayload }) {
           elementsSelectable={false}
           nodesFocusable={false}
           edgesFocusable={false}
-          minZoom={0.2}
+          minZoom={0.7}
           maxZoom={1.5}
           fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+          fitViewOptions={{ padding: 0.15, minZoom: 0.7, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
         >
           <Background gap={16} />

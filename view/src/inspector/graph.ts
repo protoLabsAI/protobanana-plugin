@@ -79,12 +79,11 @@ export function slotFlags(slots: WorkflowSlot[] | undefined): {
   return { nodeIds, inputsByNode };
 }
 
-// Layered left→right layout (the same idea as pipelines.ts autoLayout): each node
-// sits one column past its deepest input; a column stacks vertically. The small
-// ~180×64 boxes + these pitches keep clear gaps, and fitView scales the whole
-// graph into the Drawer body so nothing ever needs a scrollbar.
-const WF_COL = 230;
-const WF_ROW = 108;
+// Top→bottom dependency ranks suit the tall drawer. Center each rank under the
+// widest one; disconnected loaders remain on the first rank. The canvas owns
+// pan/zoom when a larger workflow cannot fit at a readable scale.
+const WF_COL = 280;
+const WF_ROW = 150;
 const WF_ORIGIN = 24;
 
 function layout(ids: string[], links: WorkflowLink[]): Record<string, { x: number; y: number }> {
@@ -106,10 +105,14 @@ function layout(ids: string[], links: WorkflowLink[]): Record<string, { x: numbe
   }
   const layers: Record<number, string[]> = {};
   for (const id of ids) (layers[depth[id]] ||= []).push(id);
+  const widest = Math.max(0, ...Object.values(layers).map((layer) => layer.length));
   const pos: Record<string, { x: number; y: number }> = {};
   for (const [d, layerIds] of Object.entries(layers)) {
     layerIds.forEach((id, i) => {
-      pos[id] = { x: WF_ORIGIN + Number(d) * WF_COL, y: WF_ORIGIN + i * WF_ROW };
+      pos[id] = {
+        x: WF_ORIGIN + (i + (widest - layerIds.length) / 2) * WF_COL,
+        y: WF_ORIGIN + Number(d) * WF_ROW,
+      };
     });
   }
   return pos;
@@ -124,7 +127,7 @@ export interface WfNodeData {
 }
 
 /** Build the read-only xyflow graph from the API payload: a node per
- *  ``class_type`` (laid out left→right), an edge per API input link, and the
+ *  ``class_type`` (laid out top→bottom), an edge per API input link, and the
  *  slot nodes flagged. */
 export function buildWorkflowGraph(payload: WorkflowPayload): { nodes: Node[]; edges: Edge[] } {
   const entries = workflowNodeEntries(payload.workflow);

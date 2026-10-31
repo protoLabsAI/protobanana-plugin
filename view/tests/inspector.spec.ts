@@ -30,21 +30,23 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><r
 const ALIAS = "protolabs/qwen-image";
 const WH = "sha256:wh1";
 
-// A minimal ComfyUI API-format graph: a _doc the header shows, class_type labels,
-// [node_id, out_idx] input links, and two substituted slots. Edges expected:
-//   4→6 (clip), 4→3 (model), 6→3 (positive), 4→8 (vae), 3→8 (samples), 8→9 (images)
+// Eight nodes across five dependency ranks exercise the drawer at realistic
+// graph dimensions, including multiple loaders and the width/height slot label.
 const WORKFLOW: Omit<WorkflowPayload, "comfy_ui_url"> = {
   workflow: {
     _doc: "Qwen-Image text-to-image. Prompt and seed are substituted per render.",
     "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "qwen" } },
+    "10": { class_type: "VAELoader", inputs: { vae_name: "qwen" } },
+    "5": { class_type: "EmptyLatentImage", inputs: { width: 1024, height: 1024 } },
+    "7": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["4", 1] } },
     "6": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["4", 1] } },
-    "3": { class_type: "KSampler", inputs: { seed: 0, model: ["4", 0], positive: ["6", 0] } },
-    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["4", 2] } },
+    "3": { class_type: "KSampler", inputs: { seed: 0, model: ["4", 0], positive: ["6", 0], negative: ["7", 0], latent_image: ["5", 0] } },
+    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["10", 0] } },
     "9": { class_type: "SaveImage", inputs: { images: ["8", 0] } },
   },
-  stem: "qwen_image",
+  stem: "qwen_image_2_1",
   workflows_hash: WH,
-  slots: [{ node_id: "6", input: "text" }, { node_id: "3", input: "seed" }],
+  slots: [{ node_id: "5", input: "width" }, { node_id: "5", input: "height" }, { node_id: "6", input: "text" }, { node_id: "3", input: "seed" }],
 };
 
 const records: HistoryRecord[] = [{
@@ -59,7 +61,7 @@ test("edges are derived from API [node_id, out_idx] links, not from literals", (
   const links = workflowLinks(WORKFLOW.workflow);
   const set = new Set(links.map((l) => `${l.source}->${l.target}:${l.input}`));
   expect(set).toEqual(new Set([
-    "4->6:clip", "4->3:model", "6->3:positive", "4->8:vae", "3->8:samples", "8->9:images",
+    "4->6:clip", "4->3:model", "6->3:positive", "10->8:vae", "3->8:samples", "8->9:images", "4->7:clip", "7->3:negative", "5->3:latent_image",
   ]));
   // Literals (strings, numbers) and arrays that are NOT node refs yield no edge.
   const noEdges = workflowLinks({
@@ -71,26 +73,29 @@ test("edges are derived from API [node_id, out_idx] links, not from literals", (
 
 test("slot nodes and their substituted inputs are flagged", () => {
   const flags = slotFlags(WORKFLOW.slots);
-  expect([...flags.nodeIds].sort()).toEqual(["3", "6"]);
+  expect([...flags.nodeIds].sort()).toEqual(["3", "5", "6"]);
   expect(flags.inputsByNode["6"]).toEqual(["text"]);
   expect(flags.inputsByNode["3"]).toEqual(["seed"]);
   expect(slotFlags(undefined).nodeIds.size).toBe(0);
 });
 
-test("buildWorkflowGraph labels nodes by class_type, flags slots and lays out left→right", () => {
+test("buildWorkflowGraph labels nodes by class_type, flags slots and lays out top→bottom", () => {
   const { nodes, edges } = buildWorkflowGraph({ ...WORKFLOW, comfy_ui_url: "" });
-  expect(nodes).toHaveLength(5);
-  expect(edges).toHaveLength(6);
+  expect(nodes).toHaveLength(8);
+  expect(edges).toHaveLength(9);
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n.data as Record<string, unknown>]));
   expect(byId["3"].label).toBe("KSampler");
   expect(byId["9"].label).toBe("SaveImage");
   expect(byId["6"].isSlot).toBe(true);
   expect(byId["3"].isSlot).toBe(true);
   expect(byId["4"].isSlot).toBe(false);
-  // layered: the loader (4) is left of the sampler (3), which is left of save (9).
-  const x = Object.fromEntries(nodes.map((n) => [n.id, n.position.x]));
-  expect(x["4"]).toBeLessThan(x["3"]);
-  expect(x["3"]).toBeLessThan(x["9"]);
+  const positions = Object.fromEntries(nodes.map((n) => [n.id, n.position]));
+  for (const edge of edges) {
+    expect(positions[edge.source].y).toBeLessThan(positions[edge.target].y);
+  }
+  for (const id of ["4", "5", "10"]) expect(positions[id].y).toBe(24);
+  expect(new Set(nodes.map((n) => n.position.y)).size).toBe(5);
+  expect(positions["4"].x).not.toBe(positions["10"].x);
 });
 
 test("workflowDoc reads the _doc header and tolerates its absence", () => {
@@ -174,14 +179,14 @@ test("the drawer renders the workflow read-only: class_type nodes, API edges, fl
   // _doc as the header.
   await expect(drawer(page)).toContainText("Qwen-Image text-to-image");
   // one node per class_type, labelled by class_type.
-  await expect(page.locator(".pbx-wf-node")).toHaveCount(5);
+  await expect(page.locator(".pbx-wf-node")).toHaveCount(8);
   await expect(page.locator(".pbx-wf-node-title").filter({ hasText: "KSampler" })).toBeVisible();
   // slots flagged (not by colour alone — a data flag and a visible "slot" tag).
-  await expect(page.locator('.pbx-wf-node[data-slot="true"]')).toHaveCount(2);
+  await expect(page.locator('.pbx-wf-node[data-slot="true"]')).toHaveCount(3);
   await expect(page.locator('.pbx-wf-node[data-node-id="6"][data-slot="true"]')).toHaveCount(1);
   await expect(page.locator(".pbx-wf-slot-tag").first()).toContainText("slot");
   // edges derived from the API links.
-  await expect(page.locator(".react-flow__edge")).toHaveCount(6);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(9);
 });
 
 for (const width of [1440, 760]) {
@@ -202,6 +207,7 @@ for (const width of [1440, 760]) {
       // The Drawer stays inside the view; the page itself doesn't gain a scrollbar.
       const dBox = (await page.locator(".pbx-wf-drawer").boundingBox())!;
       within(dBox);
+      expect(dBox.width).toBeCloseTo(width < 780 ? width : Math.min(720, width / 2), 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
       // The graph stays inside the Drawer body, and the body has no scrollbars.
@@ -220,15 +226,40 @@ for (const width of [1440, 760]) {
       // The info popover doesn't overflow the view.
       within((await page.locator(".image-info").boundingBox())!);
 
-      // A toolbar tooltip stays inside the view.
-      await page.locator('.pbx-wf-toolbar .pbx-tooltip-wrap:has(button[aria-label="Fit workflow to view"]) button').hover();
-      const tipBox = await page.locator('.pbx-wf-toolbar .pbx-tooltip-wrap:has(button[aria-label="Fit workflow to view"]) .pbx-tooltip').boundingBox();
-      if (tipBox) within(tipBox);
+      // Measure screen text after xyflow finishes its initial fit, and after Fit.
+      const assertReadable = async () => {
+        await expect.poll(async () => page.locator(".pbx-wf-flow .react-flow__viewport").evaluate((el) =>
+          new DOMMatrixReadOnly(getComputedStyle(el).transform).a,
+        )).toBeGreaterThanOrEqual(0.7);
+        for (const [selector, minimum] of [
+          [".pbx-wf-node-title", 12], [".pbx-wf-slot-tag", 11],
+        ] as const) {
+          const sizes = await page.locator(selector).evaluateAll((els) => els.map((el) => {
+            const viewport = el.closest(".react-flow__viewport")!;
+            const zoom = new DOMMatrixReadOnly(getComputedStyle(viewport).transform).a;
+            return parseFloat(getComputedStyle(el).fontSize) * zoom;
+          }));
+          expect(sizes.length).toBeGreaterThan(0);
+          for (const size of sizes) expect(size).toBeGreaterThanOrEqual(minimum);
+        }
+      };
+      await assertReadable();
+      await page.getByRole("button", { name: "Fit workflow to view", exact: true }).click();
+      await assertReadable();
+
+      // Both the floating toolbar and the header Close tooltip must be visible
+      // and fully inside the viewport (do not silently skip missing tooltips).
+      for (const label of ["Fit workflow to view", "Close workflow inspector"]) {
+        const wrap = page.locator(`.pbx-wf .pbx-tooltip-wrap:has(button[aria-label="${label}"])`);
+        await wrap.locator("button").hover();
+        await expect(wrap.getByRole("tooltip")).toBeVisible();
+        within((await wrap.getByRole("tooltip").boundingBox())!);
+      }
 
       mkdirSync("../docs/screenshots/images-s10", { recursive: true });
-      if (width === 1440) {
-        await page.screenshot({ path: `../docs/screenshots/images-s10/${theme}.png` });
-      }
+      await page.screenshot({
+        path: `../docs/screenshots/images-s10/${theme}${width === 1440 ? "" : "-760"}.png`,
+      });
     });
   }
 }

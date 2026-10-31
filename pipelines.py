@@ -491,18 +491,22 @@ def _resolve_data_dir(registry) -> Path:
 
 
 def _migrate_legacy_pipelines(legacy: Path, store: Path) -> None:
-    """One-time COPY of pre-fix saved specs from ``<plugin_dir>/.studio/pipelines``
+    """COPY of pre-fix saved specs from ``<plugin_dir>/.studio/pipelines``
     into the SDK store, so pipelines saved before the data-dir fix (#38) survive
     the move. Copies each spec file the store doesn't already have; never moves or
     deletes the legacy source (the copy and the delete are separate steps, so a
     crash mid-migration can't lose a spec). Best-effort: swallows and logs, so a
-    bad migration degrades rather than breaking configure()."""
+    bad migration degrades rather than breaking configure(). Durable deletion
+    markers in the store prevent retries from restoring intentionally deleted
+    specs, including after a partially completed migration."""
     try:
         if not legacy.is_dir():
             return
         copied = 0
         for src in sorted(legacy.iterdir()):
             if src.suffix.lower() not in (".yaml", ".yml", ".json") or not src.is_file():
+                continue
+            if (store / ".deleted-legacy" / src.stem).exists():
                 continue
             dst = store / src.name
             if dst.exists():
@@ -777,6 +781,12 @@ def delete_pipeline(pipeline_id: str) -> dict:
     except Exception:  # noqa: BLE001 - a bad spec still deletes; the flag just defaults off
         pass
     try:
+        # Record deletion before unlinking: configure() may retry legacy imports
+        # after any restart, including after a partially failed migration. Keep
+        # the marker even if this id is subsequently saved and deleted again.
+        markers = _saved_dir / ".deleted-legacy"
+        markers.mkdir(parents=True, exist_ok=True)
+        (markers / name).touch()
         for path in existing:
             path.unlink()
     except Exception as exc:  # noqa: BLE001

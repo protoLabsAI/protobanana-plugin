@@ -810,3 +810,77 @@ def test_migration_does_not_overwrite_an_existing_saved_spec(tmp_path, monkeypat
     pl.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=code))
     rows = {p["id"]: p for p in pl.list_pipelines()}
     assert rows["dup"]["name"] == "store"  # the store spec wins; no overwrite
+
+
+@pytest.mark.parametrize("extension", [".json", ".yaml", ".yml"])
+def test_deleted_migrated_pipeline_stays_deleted_after_restart(tmp_path, monkeypatch, extension):
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    spec = ('{"id": "old-copy", "expose_as_tool": true, "steps": '
+            '[{"id": "g", "op": "generate", "params": {"prompt": "x"}}]}')
+    source = legacy / f"old-copy{extension}"
+    source.write_text(spec, encoding="utf-8")
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    pl.configure(reg)
+    assert "pipeline_old_copy" in {t.name for t in pl.pipeline_tool_factory([], {})}
+    assert pl.delete_pipeline("old-copy")["deleted"]
+
+    # Reload the module as well as configure: deletion must persist on disk.
+    pl = _load_pipelines()
+    pl.configure(reg)
+    assert source.read_text(encoding="utf-8") == spec
+    assert "old-copy" not in {p["id"] for p in pl.list_pipelines()}
+    assert "pipeline_old_copy" not in {t.name for t in pl.pipeline_tool_factory([], {})}
+    assert not (store / "pipelines" / source.name).exists()
+
+    # A deliberate new save with the same id remains supported.
+    pl.save_pipeline({"id": "old-copy", "steps": [{"id": "g", "op": "generate"}]})
+    pl.configure(reg)
+    assert "old-copy" in {p["id"] for p in pl.list_pipelines()}
+    pl.delete_pipeline("old-copy")
+    pl.configure(reg)
+    assert "old-copy" not in {p["id"] for p in pl.list_pipelines()}
+
+
+def test_migration_retry_does_not_restore_deleted_partial_import(tmp_path, monkeypatch):
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    for name in ("a", "b"):
+        (legacy / f"{name}.json").write_text(
+            '{"id": "' + name + '", "steps": [{"id": "g", "op": "generate"}]}',
+            encoding="utf-8")
+    copyfile = pl.shutil.copyfile
+
+    def fail_second(src, dst):
+        if src.name == "b.json":
+            raise OSError("interrupted migration")
+        return copyfile(src, dst)
+
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    with monkeypatch.context() as patch:
+        patch.setattr(pl.shutil, "copyfile", fail_second)
+        pl.configure(reg)
+    assert {p["id"] for p in pl.list_pipelines()} == {"a"}
+    pl.delete_pipeline("a")
+    pl.configure(reg)
+    assert {p["id"] for p in pl.list_pipelines()} == {"b"}
+
+
+def test_delete_keeps_spec_when_deletion_marker_cannot_be_written(tmp_path):
+    mod, _ = _load(tmp_path)
+    pl = mod.pipelines
+    pl.save_pipeline({"id": "mine", "steps": [{"id": "g", "op": "generate"}]})
+    # A file in place of the marker directory simulates a failed marker write.
+    (tmp_path / "pipelines" / ".deleted-legacy").write_text("blocked", encoding="utf-8")
+    with pytest.raises(pl.SpecError, match="could not delete"):
+        pl.delete_pipeline("mine")
+    assert (tmp_path / "pipelines" / "mine.json").is_file()
+    assert "mine" in {p["id"] for p in pl.list_pipelines()}

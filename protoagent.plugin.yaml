@@ -69,6 +69,7 @@ config:
   region_model: protolabs/qwen-image-region-edit
   outpaint_model: protolabs/qwen-image-outpaint
   default_size: 1024x1024
+  comfy_ui_url: ""     # optional ComfyUI base URL; when set, the workflow inspector shows an "Open in ComfyUI" new-tab link. The plugin NEVER fetches, frames or proxies it (ADR 0008 / studio.md §2) — only the operator's own browser opens it.
   catalog_timeout_s: 5
   catalog_ttl_s: 60
   timeout_s: 300
@@ -84,6 +85,7 @@ settings:
   - { key: edit_model, label: "Edit model", type: string, description: "Gateway alias for single-image instruction edits." }
   - { key: compose_model, label: "Compose model", type: string, description: "Multi-reference alias used for multi-image composition (Qwen-Image-2.1 native multi-ref)." }
   - { key: default_size, label: "Default size", type: string, description: "WxH used when a tool call doesn't specify one." }
+  - { key: comfy_ui_url, label: "ComfyUI URL", type: string, description: "Optional ComfyUI base URL. When set, the workflow inspector shows an 'Open in ComfyUI' link that opens in a new tab; leave empty to hide it. The plugin never fetches, frames or proxies this URL (ADR 0008 / studio.md §2)." }
   - { key: catalog_timeout_s, label: "Catalog timeout (s)", type: number, description: "Short gateway catalog fetch timeout before using the static schema." }
   - { key: catalog_ttl_s, label: "Catalog cache TTL (s)", type: number, description: "Refresh the gateway catalog after this many seconds; zero disables caching." }
   - { key: timeout_s, label: "Render timeout (s)", type: number, description: "Per-request gateway timeout. ComfyUI queues jobs; slow hosts need headroom." }

@@ -996,9 +996,10 @@ test("Duplicate POSTs an editable copy under a new id that saves and runs", asyn
 // r4: the expose_as_tool toggle persists through POST /pipelines, shows the reload
 // hint, and is absent on read-only pipelines.
 test("the expose_as_tool toggle persists through POST /pipelines and shows the reload hint", async ({ page }) => {
-  const captured = await setup(page, { seed: chain2 });
+  const spec = { ...describedSpec("product-sticker"), expose_as_tool: false };
+  const captured = await setup(page, { seed: spec });
   await openPipelines(page);
-  await expect(page.locator(".pbx-node--op")).toHaveCount(2);
+  await expect(page.locator(".pbx-node--op")).toHaveCount(3);
   await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
   await expect(page.getByText("The tool appears after the next agent reload.", { exact: true })).toBeVisible();
 
@@ -1007,14 +1008,83 @@ test("the expose_as_tool toggle persists through POST /pipelines and shows the r
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect.poll(() => captured.save.length).toBe(1);
-  expect((captured.save[0] as unknown as Spec).expose_as_tool).toBe(true);
+  expect(captured.save[0]).toEqual({ ...spec, expose_as_tool: true });
   expect(validateSpec(captured.save[0] as unknown as Spec)).toEqual({ ok: true, error: "" });
 
   // Toggling back off round-trips the cleared flag.
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect.poll(() => captured.save.length).toBe(2);
-  expect(Boolean((captured.save[1] as unknown as Spec).expose_as_tool)).toBe(false);
+  expect(captured.save[1]).toEqual(spec);
+});
+
+function describedSpec(id: string): Spec {
+  const spec = bundled.find((s) => s.id === id)!;
+  return { ...spec, inputs: Object.fromEntries(Object.entries(spec.inputs || {}).map(([name, decl]) => [
+    name, { ...(typeof decl === "string" ? { type: decl } : decl), description: `Tool argument: ${name}` },
+  ])) };
+}
+
+// Regression: metadata actions must preserve the shipped document, including
+// mixed templates and descriptions used in the backend's agent-tool arg schema.
+for (const id of ["product-sticker", "portrait-restage"]) {
+  test(`${id}: Duplicate, exposure and subsequent Save preserve the full spec`, async ({ page }) => {
+    const captured = await setup(page);
+    const spec = describedSpec(id);
+    await routeShipped(page, captured, spec, "shapes-plugin");
+    await openPipelines(page);
+    await openAndRefresh(page);
+    await page.getByRole("option").filter({ hasText: spec.name }).click();
+    const start = captured.save.length;
+    await page.getByRole("button", { name: "Duplicate", exact: true }).click();
+    await expect(page.getByText("Read-only", { exact: true })).toHaveCount(0);
+    await expect.poll(() => captured.save.length).toBe(start + 1);
+    const copy = { ...spec, id: `${id}-copy`, name: `${spec.name} (copy)` };
+    expect(captured.save[start]).toEqual(copy);
+
+    await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+    const toggle = page.getByRole("switch", { name: "Expose as agent tool", exact: true });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", String(!spec.expose_as_tool));
+    await expect.poll(() => captured.save.length).toBe(start + 2);
+    const exposed = { ...copy, expose_as_tool: !spec.expose_as_tool };
+    expect(captured.save[start + 1]).toEqual(exposed);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => captured.save.length).toBe(start + 3);
+    expect(captured.save[start + 2]).toEqual(exposed);
+  });
+
+  test(`${id}: graph edits retain mixed templates and input descriptions`, () => {
+    const spec = describedSpec(id);
+    const graph = specToGraph(spec, catalog);
+    const op = graph.nodes.find((n) => n.data.kind === "op")!;
+    (op.data as OpNodeData).params.seed = 123;
+    op.position.x += 100;
+    const saved = graphToSpec(graph.nodes, graph.edges, spec);
+    for (const step of spec.steps) {
+      expect(saved.steps.find((s) => s.id === step.id)?.params).toEqual(
+        step.id === op.id ? { ...step.params, seed: 123 } : step.params,
+      );
+    }
+    expect(saved.inputs).toEqual(spec.inputs);
+  });
+}
+
+test("failed exposure save leaves the flag off, including a later Save", async ({ page }) => {
+  const spec = { ...bundled.find((s) => s.id === "product-sticker")!, expose_as_tool: false };
+  const captured = await setup(page, { seed: spec });
+  await openPipelines(page);
+  await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+  await page.route("**/fixture/pipelines", (route) => route.request().method() === "POST"
+    ? route.fulfill({ status: 500, json: { detail: "Save rejected" } }) : route.fallback());
+  const toggle = page.getByRole("switch", { name: "Expose as agent tool", exact: true });
+  await toggle.click();
+  await expect(page.getByText("Could not save — see the error", { exact: true })).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.unroute("**/fixture/pipelines");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => captured.save.length).toBe(1);
+  expect(captured.save[0]).toEqual(spec);
 });
 
 // r5: with the vendored kit CSS, the read-only badge and the expose Switch fit the

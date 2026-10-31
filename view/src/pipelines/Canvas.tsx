@@ -475,10 +475,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The spec's non-graph metadata. `description` and `expose_as_tool` are not
-  // edited on the canvas but are round-tripped so a loaded/imported pipeline
-  // keeps its agent-tool exposure and description on Save (pipeline_tool_factory
-  // requires expose_as_tool === true).
+  // Non-graph metadata, including the exposure flag edited in the Pipeline menu.
+  // Keep the loaded spec authoritative while its graph is unchanged: rendering
+  // a spec must not normalize away fields on Duplicate or a metadata-only save.
+  const loaded = useRef<{ spec: Spec; graph: string } | null>(null);
   const [meta, setMeta] = useState<SpecMeta>(() => ({ id: "untitled_pipeline", name: "Untitled pipeline" }));
   const [addOpen, setAddOpen] = useState(false);
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -546,6 +546,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   const openSpec = useCallback((spec: Spec) => {
     const g = specToGraph(spec, catalog || []);
+    loaded.current = { spec, graph: JSON.stringify(graphToSpec(g.nodes, g.edges, { id: "" })) };
     setNodes(g.nodes as unknown as Node[]);
     setEdges(g.edges as unknown as Edge[]);
     setMeta({ id: spec.id, name: spec.name || spec.id, description: spec.description, expose_as_tool: spec.expose_as_tool });
@@ -695,25 +696,36 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   // Pass the WHOLE meta (not just id/name) so `description` and `expose_as_tool`
   // survive Save — graphToSpec writes them back onto the spec.
-  const currentSpec = useCallback((): Spec => graphToSpec(asGraph().nodes, asGraph().edges, meta), [asGraph, meta]);
+  const currentSpec = useCallback((): Spec => {
+    const g = asGraph();
+    const graph = graphToSpec(g.nodes, g.edges, { id: "" });
+    if (loaded.current && JSON.stringify(graph) === loaded.current.graph) {
+      return { ...loaded.current.spec, ...meta };
+    }
+    return graphToSpec(g.nodes, g.edges, meta);
+  }, [asGraph, meta]);
 
-  const doSave = useCallback(async (): Promise<Spec | null> => {
-    if (readOnly) return null;
-    const spec = currentSpec();
+  const persistSpec = useCallback(async (spec: Spec, message: string): Promise<Spec | null> => {
     try {
       await savePipeline(spec);
       saveLocalSpec(spec);
       setPipelines(await listPipelines().catch(() => pipelines));
-      toast("Pipeline saved");
+      toast(message);
       return spec;
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
       toast("Could not save — see the error");
       return null;
     }
-  }, [currentSpec, pipelines, toast, readOnly]);
+  }, [pipelines, toast]);
+
+  const doSave = useCallback(async (): Promise<Spec | null> => {
+    if (readOnly) return null;
+    return persistSpec(currentSpec(), "Pipeline saved");
+  }, [currentSpec, persistSpec, readOnly]);
 
   const doNew = useCallback(() => {
+    loaded.current = null;
     setReadOnly(false);
     const id = `untitled_${++pipelineSeq}`;
     setNodes([]); setEdges([]); setSelectedId(null);
@@ -725,45 +737,23 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   // Duplicate (card S9b): copy the current spec under a fresh id, POST it so the
   // backend owns an editable (source "saved", read_only false) copy, and open
   // that copy — the primary path to make a read-only shipped pipeline editable.
-  // The UI flips to editable at once (so the copy "opens"); persistence follows.
-  const doDuplicate = useCallback(() => {
+  const doDuplicate = useCallback(async () => {
     const id = duplicateId(meta.id, pipelines.map((p) => p.id));
     const name = `${meta.name} (copy)`;
     const copy: Spec = { ...currentSpec(), id, name };
-    setReadOnly(false);
-    setMeta((m) => ({ ...m, id, name }));
-    setRunId(null); setRunStatus("idle"); setRunNodes({});
-    (async () => {
-      try {
-        await savePipeline(copy);
-        saveLocalSpec(copy);
-        setPipelines(await listPipelines().catch(() => pipelines));
-        toast("Duplicated — now editable");
-      } catch (e) {
-        setError(String(e instanceof Error ? e.message : e));
-        toast("Could not save the copy — see the error");
-      }
-    })();
-  }, [currentSpec, meta, pipelines, toast]);
+    if (await persistSpec(copy, "Duplicated — now editable")) openSpec(copy);
+  }, [currentSpec, meta, pipelines, persistSpec, openSpec]);
 
-  // Toggle agent-tool exposure on an editable pipeline (card S9b): flip the flag
-  // and persist it through POST /pipelines so the tool appears/disappears on the
-  // next agent reload (pipeline_tool_factory requires expose_as_tool === true).
-  const setExposeAsTool = useCallback((on: boolean) => {
-    setMeta((m) => ({ ...m, expose_as_tool: on }));
-    const spec = graphToSpec(asGraph().nodes, asGraph().edges, { ...meta, expose_as_tool: on });
-    (async () => {
-      try {
-        await savePipeline(spec);
-        saveLocalSpec(spec);
-        setPipelines(await listPipelines().catch(() => pipelines));
-        toast(on ? "Exposed as an agent tool" : "No longer an agent tool");
-      } catch (e) {
-        setError(String(e instanceof Error ? e.message : e));
-        toast("Could not update — see the error");
-      }
-    })();
-  }, [asGraph, meta, pipelines, toast]);
+  // Commit the flag to local state only after the backend accepts it.
+  const [exposureSaving, setExposureSaving] = useState(false);
+  const setExposeAsTool = useCallback(async (on: boolean) => {
+    if (readOnly || exposureSaving) return;
+    setExposureSaving(true);
+    const spec = { ...currentSpec(), expose_as_tool: on };
+    const saved = await persistSpec(spec, on ? "Exposed as an agent tool" : "No longer an agent tool");
+    if (saved) setMeta((m) => m.id === spec.id ? { ...m, expose_as_tool: on } : m);
+    setExposureSaving(false);
+  }, [currentSpec, persistSpec, readOnly, exposureSaving]);
 
   const doExport = useCallback(() => {
     const spec = currentSpec();

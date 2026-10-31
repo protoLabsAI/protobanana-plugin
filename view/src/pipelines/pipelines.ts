@@ -96,6 +96,7 @@ export interface InputNodeData {
   name: string;
   inputType: PortType;
   default?: unknown;
+  description?: string;
 }
 
 export type NodeData = OpNodeData | InputNodeData;
@@ -216,7 +217,7 @@ export interface Spec {
   name?: string;
   description?: string;
   expose_as_tool?: boolean;
-  inputs?: Record<string, string | { type: string; default?: unknown }>;
+  inputs?: Record<string, string | { type: string; default?: unknown; description?: string }>;
   steps: SpecStep[];
   output?: string;
   ui?: { positions?: Record<string, { x: number; y: number }> };
@@ -257,11 +258,13 @@ export function graphToSpec(nodes: GNode[], edges: GEdge[], meta: SpecMeta): Spe
     return n.data.kind === "input" ? n.data.name : n.id;
   };
 
-  const inputs: Record<string, string | { type: string; default?: unknown }> = {};
+  const inputs: Record<string, string | { type: string; default?: unknown; description?: string }> = {};
   for (const n of inputNodes) {
-    inputs[n.data.name] = n.data.default == null || n.data.default === ""
+    const hasDefault = n.data.default != null && n.data.default !== "";
+    inputs[n.data.name] = !hasDefault && n.data.description === undefined
       ? n.data.inputType
-      : { type: n.data.inputType, default: n.data.default };
+      : { type: n.data.inputType, ...(hasDefault ? { default: n.data.default } : {}),
+        ...(n.data.description !== undefined ? { description: n.data.description } : {}) };
   }
 
   const order = runOrder(nodes, edges);
@@ -276,7 +279,16 @@ export function graphToSpec(nodes: GNode[], edges: GEdge[], meta: SpecMeta): Spe
     for (const pname of n.data.promoted) {
       const edge = edges.find((e) => e.target === n.id && e.targetHandle === paramHandle(pname));
       const ref = edge ? refOf(edge.source) : null;
-      if (ref) params[pname] = `{{inputs.${ref}}}`;
+      // A loaded template can contain literal text and several input references.
+      // Preserve it while its wiring still matches; a newly wired/replaced port
+      // intentionally becomes a single input reference.
+      const value = params[pname];
+      const names = typeof value === "string" ? placeholders(value) : [];
+      const refs = edges.filter((e) => e.target === n.id && e.targetHandle === paramHandle(pname))
+        .map((e) => refOf(e.source));
+      const sameWiring = names.length > 0 && names.every((name) => refs.includes(name)) &&
+        refs.every((name) => name !== null && names.includes(name));
+      if (ref && !sameWiring) params[pname] = `{{inputs.${ref}}}`;
     }
     if (Object.keys(params).length) step.params = params;
 
@@ -351,7 +363,8 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
     const inputType = (typeof decl === "string" ? decl : decl.type) as PortType;
     const def = typeof decl === "string" ? undefined : decl.default;
     const id = inputNodeId(name);
-    nodes.push({ id, type: "input", position: posFor(id), data: { kind: "input", name, inputType, default: def } });
+    nodes.push({ id, type: "input", position: posFor(id), data: { kind: "input", name, inputType, default: def,
+      description: typeof decl === "string" ? undefined : decl.description } });
   }
 
   const sourceNodeIdFor = (ref: string): string | null => {

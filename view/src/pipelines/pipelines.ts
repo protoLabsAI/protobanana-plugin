@@ -326,7 +326,15 @@ export function graphToSpec(nodes: GNode[], edges: GEdge[], meta: SpecMeta): Spe
  *  of {@link graphToSpec}: it restores op and input nodes, the ref and templated
  *  edges, and the `ui.positions` layout. */
 export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode[]; edges: GEdge[] } {
-  const positions = spec.ui?.positions || {};
+  // ui.positions may arrive as {x,y} objects (a canvas Save writes these) OR as
+  // [x,y] tuples (hand-authored YAML, e.g. the bundled specs). Normalise both and
+  // drop anything non-finite so a bad entry can't push a node off-canvas.
+  const rawPositions = (spec.ui?.positions || {}) as Record<string, unknown>;
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const [id, p] of Object.entries(rawPositions)) {
+    const pt = normalizePos(p);
+    if (pt) positions[id] = pt;
+  }
   const steps = spec.steps || [];
   const stepIds = new Set(steps.map((s) => s.id));
   const inputDecls = spec.inputs || {};
@@ -334,8 +342,9 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
 
   const nodes: GNode[] = [];
   const edges: GEdge[] = [];
-  let auto = 0;
-  const posFor = (id: string) => positions[id] || { x: 40 + (auto++ % 4) * 220, y: 40 + Math.floor(auto / 4) * 150 };
+  // A placeholder for nodes a spec doesn't position; autoLayout (below) rewrites
+  // every position when the saved set is incomplete, so this is never rendered.
+  const posFor = (id: string) => positions[id] || { x: 0, y: 0 };
 
   // Input nodes.
   for (const [name, decl] of Object.entries(inputDecls)) {
@@ -386,8 +395,34 @@ export function specToGraph(spec: Spec, catalog: CatalogEntry[]): { nodes: GNode
       });
     }
   }
-  return { nodes: Object.keys(positions).length ? nodes : autoLayout(nodes, edges), edges };
+  // Honour saved positions only when they cover EVERY node — a canvas Save writes
+  // one for each (acceptance r4). A spec that positions only some nodes (e.g. a
+  // bundled YAML that places its op steps but not the declared input nodes) is
+  // laid out from scratch so nothing overlaps or sits off-canvas (review item 6).
+  const complete = nodes.length > 0 && nodes.every((n) => positions[n.id]);
+  return { nodes: complete ? nodes : autoLayout(nodes, edges), edges };
 }
+
+/** Coerce a stored position ({x,y} object or [x,y] tuple) to {x,y}, or null if
+ *  it is missing/malformed. */
+function normalizePos(p: unknown): { x: number; y: number } | null {
+  let x: unknown;
+  let y: unknown;
+  if (Array.isArray(p)) [x, y] = p;
+  else if (p && typeof p === "object") { x = (p as Record<string, unknown>).x; y = (p as Record<string, unknown>).y; }
+  else return null;
+  const nx = Number(x);
+  const ny = Number(y);
+  return Number.isFinite(nx) && Number.isFinite(ny) ? { x: nx, y: ny } : null;
+}
+
+// Layered left→right auto-layout (card: Auto-layout), dagre/elk-style: each node
+// sits one column past its deepest input, input nodes stay in the first column,
+// and the per-column/row pitches keep >= 60px horizontal and >= 32px vertical
+// gaps between the (240px-wide, <=~300px-tall) node boxes so none overlap.
+const LAYOUT_COL = 320; // 240px node + 80px horizontal gap
+const LAYOUT_ROW = 360; // tallest node (~300px) + >=60px vertical gap
+const LAYOUT_ORIGIN = 40;
 
 /** A simple layered auto-layout (card: Auto-layout). Depth = longest ref path
  *  from a source; nodes in a layer stack vertically. */
@@ -410,7 +445,10 @@ export function autoLayout(nodes: GNode[], edges: GEdge[]): GNode[] {
   for (const n of nodes) (layers[depth[n.id]] ||= []).push(n.id);
   const pos = new Map<string, { x: number; y: number }>();
   for (const [d, ids] of Object.entries(layers)) {
-    ids.forEach((id, i) => pos.set(id, { x: 40 + Number(d) * 300, y: 40 + i * 360 }));
+    ids.forEach((id, i) => pos.set(id, {
+      x: LAYOUT_ORIGIN + Number(d) * LAYOUT_COL,
+      y: LAYOUT_ORIGIN + i * LAYOUT_ROW,
+    }));
   }
   return nodes.map((n) => ({ ...n, position: pos.get(n.id) || n.position }));
 }

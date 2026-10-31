@@ -55,6 +55,21 @@ except pl.SpecError as e:
 
 const entry = (op: string) => catalog.find((e) => e.op === op)!;
 
+// A node box is at most 240px wide and ~300px tall; assert an auto-layout leaves
+// no two boxes intersecting (the review's overlap finding), which also proves the
+// column/row pitches keep the required >=60px / >=32px gaps.
+const NODE_W = 240;
+const NODE_H = 320;
+function assertNoOverlap(nodes: GNode[]) {
+  for (const [i, a] of nodes.entries()) {
+    for (const b of nodes.slice(i + 1)) {
+      const sep = a.position.x + NODE_W <= b.position.x || b.position.x + NODE_W <= a.position.x
+        || a.position.y + NODE_H <= b.position.y || b.position.y + NODE_H <= a.position.y;
+      expect(sep, `${a.id} overlaps ${b.id}`).toBe(true);
+    }
+  }
+}
+
 // gen → region edit → bgremove → compose (the acceptance r2 flow), with a text
 // input promoted into the generate prompt — exercises BOTH wiring mechanisms
 // (ref ports and templated params) and ui.positions.
@@ -127,6 +142,55 @@ test("round trip canvas graph → spec → graph preserves steps, refs and ui.po
   expect(b.nodes).toEqual(a.nodes);
   expect(b.positions).toEqual(a.positions);
   expect(b.edges).toEqual(a.edges);
+});
+
+// Review item 6 (the pure-logic half): a spec that positions only SOME nodes —
+// the bundled YAMLs place op steps (as [x,y] tuples) but not the declared input
+// nodes — is laid out from scratch, inputs in the first column, left→right, with
+// no overlap. (The browser half asserts the same after fitView.)
+test("specToGraph auto-lays-out when ui.positions is incomplete; inputs lead, no overlap", () => {
+  const spec: Spec = {
+    id: "sticker", name: "Sticker",
+    inputs: { subject: "text", style: { type: "text", default: "studio" } },
+    steps: [
+      { id: "gen", op: "generate", params: { prompt: "{{inputs.subject}}, {{inputs.style}}" } },
+      { id: "fix", op: "region_edit", image: "gen", params: { grounding: "the label" } },
+      { id: "cut", op: "remove_background", image: "fix" },
+    ],
+    output: "cut",
+    // op steps positioned as YAML [x,y] tuples; the two input nodes have none.
+    ui: { positions: { gen: [0, 0], fix: [260, 0], cut: [520, 0] } as unknown as Record<string, { x: number; y: number }> },
+  };
+  const { nodes } = specToGraph(spec, catalog);
+  expect(nodes).toHaveLength(5);
+  const at = Object.fromEntries(nodes.map((n) => [n.id, n.position]));
+  // Auto-layout ran — the op nodes are NOT left at the spec's raw tuple.
+  expect(at["gen"]).not.toEqual({ x: 0, y: 0 });
+  // Input nodes occupy the leftmost column; the op chain marches left→right.
+  const minX = Math.min(...nodes.map((n) => n.position.x));
+  expect(at[inputNodeId("subject")].x).toBe(minX);
+  expect(at[inputNodeId("style")].x).toBe(minX);
+  expect(at["gen"].x).toBeLessThan(at["fix"].x);
+  expect(at["fix"].x).toBeLessThan(at["cut"].x);
+  assertNoOverlap(nodes);
+});
+
+// The inverse: when EVERY node is positioned (a canvas Save writes them all), the
+// saved layout is honoured verbatim — including [x,y] tuples normalised to {x,y}
+// (acceptance r4 — positions survive a reload).
+test("specToGraph honours a complete position set and normalises [x,y] tuples", () => {
+  const spec: Spec = {
+    id: "p", name: "P",
+    inputs: { pic: "image" },
+    steps: [{ id: "edit1", op: "edit", image: "inputs.pic", params: { prompt: "x" } }],
+    ui: { positions: {
+      [inputNodeId("pic")]: [11, 22],
+      edit1: { x: 300, y: 40 },
+    } as unknown as Record<string, { x: number; y: number }> },
+  };
+  const at = Object.fromEntries(specToGraph(spec, catalog).nodes.map((n) => [n.id, n.position]));
+  expect(at[inputNodeId("pic")]).toEqual({ x: 11, y: 22 });
+  expect(at["edit1"]).toEqual({ x: 300, y: 40 });
 });
 
 // The round trip must carry the fields the backend uses but the canvas doesn't
@@ -422,15 +486,67 @@ function buildChainSpec(): Spec {
   return graphToSpec(g.nodes, g.edges, { id: "chain", name: "Chain" });
 }
 
+// Review item 6: after a load the view must be FITTED (auto-layout runs when the
+// spec doesn't position every node — the bundled YAMLs place op steps but not the
+// declared input nodes) and after an add the new node must be fully on-canvas, not
+// half-off at x=-44. Read the node boxes against the stage box and assert every box
+// is inside the stage and no two intersect.
+async function layout(page: Page): Promise<{ count: number; inside: boolean; disjoint: boolean }> {
+  const stage = (await page.locator(".pbx-graph-stage").boundingBox())!;
+  const boxes = await page.locator(".react-flow__node").evaluateAll((ns) =>
+    ns.map((n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; }));
+  const inside = boxes.every((b) =>
+    b.x >= stage.x - 1 && b.y >= stage.y - 1 &&
+    b.x + b.w <= stage.x + stage.width + 1 && b.y + b.h <= stage.y + stage.height + 1);
+  const disjoint = boxes.every((a, i) => boxes.slice(i + 1).every((b) =>
+    a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
+  return { count: boxes.length, inside, disjoint };
+}
+
+for (const width of [1440, 760]) {
+  test(`item 6 @ ${width}px: added nodes stay on-canvas and each bundled pipeline loads fitted + non-overlapping`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await setup(page);
+    await openPipelines(page);
+
+    // Build gen → region edit → remove background from an empty canvas; each new
+    // node must be fully inside the canvas (the x=-44 half-off finding).
+    for (const [i, label] of ["Generate", "Region edit", "Remove background"].entries()) {
+      await page.getByRole("button", { name: "Add node", exact: true }).click();
+      await page.getByRole("menuitem", { name: label, exact: true }).click();
+      await expect(page.locator(".react-flow__node")).toHaveCount(i + 1);
+      await expect.poll(async () => (await layout(page)).inside).toBe(true);
+    }
+
+    // Load each bundled pipeline: auto-layout + fitView put every node inside the
+    // stage with no two boxes overlapping (the "Product sticker off the left edge,
+    // style input overlapping" finding).
+    for (const spec of bundled) {
+      await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+      await page.getByRole("option", { name: spec.name, exact: true }).click();
+      const expected = spec.steps.length + Object.keys(spec.inputs || {}).length;
+      await expect(page.locator(".react-flow__node")).toHaveCount(expected);
+      await expect.poll(async () => layout(page)).toEqual({ count: expected, inside: true, disjoint: true });
+    }
+  });
+}
+
 // Capture the PR screenshots (light / dark / narrow). Committed under
-// docs/screenshots/images-s8/ as the branch's visual evidence.
+// docs/screenshots/images-s8/ as the branch's visual evidence. Shot with the
+// "Product sticker" bundled pipeline LOADED (review item 6): it auto-lays out and
+// fitView frames it, so the shots prove the previously off-canvas graph now fits.
+const sticker = bundled.find((s) => s.id === "product-sticker")!;
 for (const [name, theme, width] of [["light", "light", 1440], ["dark", "dark", 1440], ["narrow", "light", 760]] as const) {
   test(`screenshot: pipelines ${name}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    await setup(page, { theme, seed: buildChainSpec() });
+    await setup(page, { theme });
     await openPipelines(page);
-    await page.locator(".react-flow__node").filter({ hasText: "Region" }).click();
-    await expect(page.locator(".pbx-node--op").first()).toBeVisible();
+    await page.getByRole("button", { name: "Pipeline menu", exact: true }).click();
+    await page.getByRole("option", { name: sticker.name, exact: true }).click();
+    const count = sticker.steps.length + Object.keys(sticker.inputs || {}).length;
+    await expect(page.locator(".react-flow__node")).toHaveCount(count);
+    await expect.poll(async () => layout(page)).toEqual({ count, inside: true, disjoint: true });
+    await page.locator(".pbx-node--op").first().click(); // populate the inspector
     await page.waitForTimeout(200); // let fitView settle
     mkdirSync("../docs/screenshots/images-s8", { recursive: true });
     await page.screenshot({ path: `../docs/screenshots/images-s8/${name}.png`, fullPage: true });

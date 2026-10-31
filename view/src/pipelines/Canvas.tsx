@@ -16,6 +16,7 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  useNodesInitialized,
   useReactFlow,
   type Connection,
   type Edge,
@@ -454,6 +455,10 @@ let pipelineSeq = 0;
 function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: PipelinesCanvasProps) {
   const toast = useToast();
   const flow = useReactFlow();
+  // True once xyflow has measured every node; the authoritative signal to fit the
+  // view AFTER measurement (never before — review item 6), and to reveal a freshly
+  // added node once its real footprint is known.
+  const nodesInitialized = useNodesInitialized();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -478,12 +483,53 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const edgesRef = useRef<Edge[]>(edges);
   edgesRef.current = edges;
   const stageRef = useRef<HTMLDivElement>(null);
+  const flowRef = useRef<HTMLDivElement>(null);
   const clipboard = useRef<Node[]>([]);
+  // One-shot view intents consumed by the nodesInitialized effect below: a full
+  // fit after a load, or revealing one freshly added node.
+  const fitPending = useRef(false);
+  const revealPending = useRef<string | null>(null);
 
   const asGraph = useCallback((): { nodes: GNode[]; edges: GEdge[] } => ({
     nodes: nodesRef.current as unknown as GNode[],
     edges: edgesRef.current as unknown as GEdge[],
   }), []);
+
+  const fitGraph = useCallback(() => flow.fitView({ padding: 0.15, maxZoom: 1 }), [flow]);
+
+  // Bring a freshly placed node fully into view: leave the viewport alone if it
+  // already fits, else fit the whole graph so nothing lands half-off the canvas
+  // (review item 6 — a node that fell to x=-44 after an add).
+  const ensureNodeVisible = useCallback((id: string) => {
+    const node = flow.getNode(id);
+    const container = flowRef.current;
+    if (!node || !container) { fitGraph(); return; }
+    const vp = flow.getViewport();
+    const rect = container.getBoundingClientRect();
+    const w = (node.measured?.width ?? 240) * vp.zoom;
+    const h = (node.measured?.height ?? 200) * vp.zoom;
+    const sx = node.position.x * vp.zoom + vp.x;
+    const sy = node.position.y * vp.zoom + vp.y;
+    const outside = sx < 0 || sy < 0 || sx + w > rect.width || sy + h > rect.height;
+    if (outside) fitGraph();
+  }, [flow, fitGraph]);
+
+  // Fit / reveal ONLY after xyflow has measured the nodes (nodesInitialized),
+  // never on a bare requestAnimationFrame before measurement (review item 6).
+  useEffect(() => {
+    if (!nodesInitialized) return;
+    if (fitPending.current) {
+      fitPending.current = false;
+      revealPending.current = null;
+      if (nodesRef.current.length) fitGraph();
+      return;
+    }
+    if (revealPending.current) {
+      const id = revealPending.current;
+      revealPending.current = null;
+      ensureNodeVisible(id);
+    }
+  }, [nodesInitialized, fitGraph, ensureNodeVisible]);
 
   const openSpec = useCallback((spec: Spec) => {
     const g = specToGraph(spec, catalog || []);
@@ -495,8 +541,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     setRunStatus("idle");
     setRunNodes({});
     setReadOnly(false);
-    requestAnimationFrame(() => flow.fitView({ padding: 0.2, maxZoom: 1 }));
-  }, [catalog, flow]);
+    // Fit once the new nodes are measured (see the nodesInitialized effect).
+    fitPending.current = true;
+    revealPending.current = null;
+  }, [catalog]);
 
   // Restore the last-open graph on mount (card r4: ui.positions survive a
   // reload — the editor keeps full specs in localStorage, see pipelines.ts).
@@ -565,8 +613,11 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     }
     setSelectedId(node.id);
     setAddOpen(false);
-    requestAnimationFrame(() => flow.setCenter(pos.x + 120, pos.y + 140, { zoom: 1 }));
-  }, [selectedId, flow]);
+    // Reveal the new node once measured — fit only if it would fall outside the
+    // viewport, so earlier nodes aren't pushed off the canvas (review item 6).
+    revealPending.current = node.id;
+    fitPending.current = false;
+  }, [selectedId]);
 
   const addOpNode = useCallback((entry: CatalogEntry) => {
     placeNode(makeOpNode(entry, { x: 0, y: 0 }, newNodeId(entry.op, nodesRef.current.map((n) => n.id))));
@@ -800,7 +851,6 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   // ---- keyboard: delete / copy / paste / fit (declared via the bridge) -----
 
-  const flowRef = useRef<HTMLDivElement>(null);
   const onCanvasKeyDown = (e: React.KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
     if (!mod && e.key === "1") { e.preventDefault(); flow.fitView({ padding: 0.2, maxZoom: 1 }); return; } // fit (declared keybinding)
@@ -909,7 +959,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
             minZoom={Math.max(MIN_ABS, 0.25)}
             maxZoom={Math.min(MAX_ABS, 1.5)}
             fitView
-            fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+            fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={18} />

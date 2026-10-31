@@ -60,6 +60,9 @@ import {
   REF_PORTS,
   autoLayout,
   connectionAllowed,
+  deleteLocalSpec,
+  deletePipeline,
+  duplicateId,
   getLastOpen,
   graphToSpec,
   inputNodeId,
@@ -132,7 +135,7 @@ function portClass(type: PortType | "image_list"): string {
   return `pbx-port pbx-port--${t}`;
 }
 
-function OpNode({ id, data: raw, selected }: NodeProps) {
+function OpNode({ id, data: raw, selected, isConnectable }: NodeProps) {
   const data = raw as unknown as OpNodeData;
   const { runNodes, thumbs, onRerunFrom } = useContext(GraphCtx);
   const run = runNodes[id];
@@ -169,25 +172,25 @@ function OpNode({ id, data: raw, selected }: NodeProps) {
       <div className="pbx-node-ports">
         {refPorts.map((port) => (
           <span key={port.name} className="pbx-port-row">
-            <Handle id={port.name} type="target" position={Position.Left} className={portClass(port.type)} />
+            <Handle id={port.name} type="target" position={Position.Left} isConnectable={isConnectable} className={portClass(port.type)} />
             <span className="pbx-port-label">{port.name}</span>
           </span>
         ))}
         {data.promoted.map((pname) => (
           <span key={pname} className="pbx-port-row">
-            <Handle id={paramHandle(pname)} type="target" position={Position.Left}
+            <Handle id={paramHandle(pname)} type="target" position={Position.Left} isConnectable={isConnectable}
               className={portClass(paramPortType(pname))} />
             <span className="pbx-port-label">{pname}</span>
           </span>
         ))}
       </div>
-      <Handle id={OUT_HANDLE} type="source" position={Position.Right} className={`${portClass("image")} pbx-port-out`} />
+      <Handle id={OUT_HANDLE} type="source" position={Position.Right} isConnectable={isConnectable} className={`${portClass("image")} pbx-port-out`} />
       <span className="pbx-port-out-label" aria-hidden="true">out</span>
     </div>
   );
 }
 
-function InputNode({ data: raw, selected }: NodeProps) {
+function InputNode({ data: raw, selected, isConnectable }: NodeProps) {
   const data = raw as unknown as InputNodeData;
   return (
     <div className={`pbx-node pbx-node--input${selected ? " is-selected" : ""}`}>
@@ -195,7 +198,7 @@ function InputNode({ data: raw, selected }: NodeProps) {
         <span className="pbx-node-title">{data.name}</span>
         <Badge className={`pbx-type-badge pbx-type-badge--${data.inputType}`}>{PORT_LABEL[data.inputType]}</Badge>
       </div>
-      <Handle id={OUT_HANDLE} type="source" position={Position.Right} className={portClass(data.inputType)} />
+      <Handle id={OUT_HANDLE} type="source" position={Position.Right} isConnectable={isConnectable} className={portClass(data.inputType)} />
     </div>
   );
 }
@@ -243,6 +246,7 @@ function NodeInspector({
   entry,
   running,
   canRerun,
+  readOnly,
   onPatch,
   onPromote,
   onRun,
@@ -254,6 +258,10 @@ function NodeInspector({
   entry?: CatalogEntry;
   running: boolean;
   canRerun: boolean;
+  // A read-only (shipped-by-another-plugin) pipeline: the inspector shows its
+  // params disabled and keeps Run as the primary action, but hides Delete and
+  // the param-editing affordances (card S9b).
+  readOnly: boolean;
   onPatch: (data: Partial<OpNodeData | InputNodeData>) => void;
   onPromote: (param: string, on: boolean) => void;
   onRun: () => void;
@@ -295,24 +303,31 @@ function NodeInspector({
     return (
       <form className="composer pbx-inspector" aria-label="Node inspector" onSubmit={(e) => e.preventDefault()}>
         <span className="pbx-inspector-kind">Input</span>
-        <FormField label="Name">
-          <Input aria-label="Input name" value={d.name}
-            onChange={(e) => onPatch({ name: e.target.value.replace(/[^a-zA-Z0-9_]/g, "") })} />
-        </FormField>
-        <FormField label="Type">
-          <Segmented ariaLabel="Input type" size="sm" value={d.inputType}
-            onChange={(v) => onPatch({ inputType: v as PortType })}
-            options={[{ value: "text", label: "Text" }, { value: "image", label: "Image" }, { value: "mask", label: "Mask" }, { value: "seed", label: "Seed" }]} />
-        </FormField>
-        <FormField label="Default" hint="Optional default value for this input.">
-          <Input aria-label="Input default" value={String(d.default ?? "")}
-            onChange={(e) => onPatch({ default: e.target.value })} />
-        </FormField>
-        <div className="composer-actions">
-          <div className="action-bar pbx-node-actions" role="toolbar" aria-label="Node actions" ref={toolbarRef} onKeyDown={onToolbarKey}>
-            <Button variant="ghost" size="sm" data-toolbar-item="" className="pbx-node-delete" onClick={onDelete}>Delete</Button>
+        {/* A disabled fieldset greys the whole param block at once in read-only —
+            it also covers the Segmented/Switch controls the DS stand-ins don't
+            take a `disabled` prop for (card S9b). */}
+        <fieldset className="pbx-inspector-fields" disabled={readOnly}>
+          <FormField label="Name">
+            <Input aria-label="Input name" value={d.name}
+              onChange={(e) => onPatch({ name: e.target.value.replace(/[^a-zA-Z0-9_]/g, "") })} />
+          </FormField>
+          <FormField label="Type">
+            <Segmented ariaLabel="Input type" size="sm" value={d.inputType}
+              onChange={(v) => onPatch({ inputType: v as PortType })}
+              options={[{ value: "text", label: "Text" }, { value: "image", label: "Image" }, { value: "mask", label: "Mask" }, { value: "seed", label: "Seed" }]} />
+          </FormField>
+          <FormField label="Default" hint="Optional default value for this input.">
+            <Input aria-label="Input default" value={String(d.default ?? "")}
+              onChange={(e) => onPatch({ default: e.target.value })} />
+          </FormField>
+        </fieldset>
+        {!readOnly && (
+          <div className="composer-actions">
+            <div className="action-bar pbx-node-actions" role="toolbar" aria-label="Node actions" ref={toolbarRef} onKeyDown={onToolbarKey}>
+              <Button variant="ghost" size="sm" data-toolbar-item="" className="pbx-node-delete" onClick={onDelete}>Delete</Button>
+            </div>
           </div>
-        </div>
+        )}
       </form>
     );
   }
@@ -341,13 +356,13 @@ function NodeInspector({
 
       {has("grounding") && (
         <FormField className="composer-grounding" label="What to change?" hint="A short noun phrase, e.g. “the red car”.">
-          <Input aria-label="What to change?" value={strVal("grounding")} placeholder="the red car"
+          <Input aria-label="What to change?" value={strVal("grounding")} placeholder="the red car" disabled={readOnly}
             onChange={(e) => setParam("grounding", e.target.value)} />
         </FormField>
       )}
 
       {has("prompt") && (
-        <Textarea className="composer-prompt" aria-label="Prompt" rows={2} value={strVal("prompt")}
+        <Textarea className="composer-prompt" aria-label="Prompt" rows={2} value={strVal("prompt")} disabled={readOnly}
           placeholder="Describe this step…" onChange={(e) => setParam("prompt", e.target.value)} />
       )}
 
@@ -355,7 +370,7 @@ function NodeInspector({
         <div className="composer-margins" role="group" aria-label="Outpaint margins">
           {margins.map((edge) => (
             <FormField key={edge} className="composer-margin" label={edge[0].toUpperCase() + edge.slice(1)}>
-              <Input aria-label={edge} type="number" inputMode="numeric" min={0} step={16}
+              <Input aria-label={edge} type="number" inputMode="numeric" min={0} step={16} disabled={readOnly}
                 value={String(Number(d.params[edge] ?? 0))}
                 onChange={(e) => setParam(edge, Math.max(0, Number(e.target.value) || 0))} />
             </FormField>
@@ -370,7 +385,7 @@ function NodeInspector({
       <div className="composer-actions">
         <Popover className="composer-options" label="Options" align="start" side="top"
           trigger={({ toggle, open }) => (
-            <Button variant="ghost" className="composer-options-btn" aria-expanded={open} aria-label={`Options: ${optionSummary}`} onClick={toggle}>
+            <Button variant="ghost" className="composer-options-btn" disabled={readOnly} aria-expanded={open} aria-label={`Options: ${optionSummary}`} onClick={toggle}>
               <span className="composer-options-icon" aria-hidden="true"><SlidersIcon /></span>
               <span className="composer-options-summary">{optionSummary}</span>
               <span className="composer-options-caret" aria-hidden="true">▾</span>
@@ -423,7 +438,7 @@ function NodeInspector({
 
         <div className="action-bar pbx-node-actions" role="toolbar" aria-label="Node actions" ref={toolbarRef} onKeyDown={onToolbarKey}>
           <Button variant="ghost" size="sm" data-toolbar-item="" disabled={!outputMediaId} onClick={onOpenOutput}>Open in Playground</Button>
-          <Button variant="ghost" size="sm" data-toolbar-item="" className="pbx-node-delete" onClick={onDelete}>Delete</Button>
+          {!readOnly && <Button variant="ghost" size="sm" data-toolbar-item="" className="pbx-node-delete" onClick={onDelete}>Delete</Button>}
         </div>
         <Button variant="primary" type="submit" className="composer-submit" data-toolbar-item="" loading={running}>
           {canRerun ? "Run from here" : "Run"}
@@ -462,10 +477,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The spec's non-graph metadata. `description` and `expose_as_tool` are not
-  // edited on the canvas but are round-tripped so a loaded/imported pipeline
-  // keeps its agent-tool exposure and description on Save (pipeline_tool_factory
-  // requires expose_as_tool === true).
+  // Non-graph metadata, including the exposure flag edited in the Pipeline menu.
+  // Keep the loaded spec authoritative while its graph is unchanged: rendering
+  // a spec must not normalize away fields on Duplicate or a metadata-only save.
+  const loaded = useRef<{ spec: Spec; graph: string } | null>(null);
   const [meta, setMeta] = useState<SpecMeta>(() => ({ id: "untitled_pipeline", name: "Untitled pipeline" }));
   const [addOpen, setAddOpen] = useState(false);
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -533,6 +548,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   const openSpec = useCallback((spec: Spec) => {
     const g = specToGraph(spec, catalog || []);
+    loaded.current = { spec, graph: JSON.stringify(graphToSpec(g.nodes, g.edges, { id: "" })) };
     setNodes(g.nodes as unknown as Node[]);
     setEdges(g.edges as unknown as Edge[]);
     setMeta({ id: spec.id, name: spec.name || spec.id, description: spec.description, expose_as_tool: spec.expose_as_tool });
@@ -574,14 +590,16 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   }, []);
 
   const isValidConnection = useCallback((c: Connection | Edge) => {
+    if (readOnly) return false; // read-only canvas: nothing may be wired (card S9b)
     if (!c.source || !c.target || c.source === c.target) return false;
     const src = nodesRef.current.find((n) => n.id === c.source);
     const tgt = portTarget(c.target, c.targetHandle);
     if (!src || !tgt) return false;
     return connectionAllowed(nodeOutputType(src.data as unknown as NodeData), tgt);
-  }, [portTarget]);
+  }, [portTarget, readOnly]);
 
   const onConnect = useCallback((c: Connection) => {
+    if (readOnly) return; // belt-and-suspenders alongside isValidConnection
     if (!isValidConnection(c)) { toast("Port types don't match"); return; }
     setEdges((es) => {
       // Single ref/param ports hold one edge; `images` (image_list) allows many.
@@ -591,11 +609,13 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       const pruned = multi ? es : es.filter((e) => !(e.target === c.target && e.targetHandle === c.targetHandle));
       return addEdge({ ...c, id: `e-${c.source}-${c.target}-${c.targetHandle}-${pruned.length}` }, pruned);
     });
-  }, [isValidConnection, toast]);
+  }, [isValidConnection, toast, readOnly]);
 
   // ---- node/graph mutations ------------------------------------------------
 
   const placeNode = useCallback((node: GNode) => {
+    if (readOnly) return; // read-only canvas: no node adds (card S9b) — defence in
+    // depth; the Add menu and paste that reach here are already gated on readOnly.
     const existing = nodesRef.current;
     const source = existing.find((n) => n.id === selectedId);
     let pos = source ? { x: source.position.x + 300, y: source.position.y } : { x: 40, y: 40 };
@@ -617,7 +637,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     // viewport, so earlier nodes aren't pushed off the canvas (review item 6).
     revealPending.current = node.id;
     fitPending.current = false;
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   const addOpNode = useCallback((entry: CatalogEntry) => {
     placeNode(makeOpNode(entry, { x: 0, y: 0 }, newNodeId(entry.op, nodesRef.current.map((n) => n.id))));
@@ -632,6 +652,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   }, [placeNode]);
 
   const patchSelected = useCallback((patch: Partial<OpNodeData | InputNodeData>) => {
+    if (readOnly) return; // read-only canvas: params are not editable (card S9b)
     const selected = nodesRef.current.find((n) => n.id === selectedId);
     if (!selected) return;
     const data = selected.data as unknown as NodeData;
@@ -652,9 +673,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       })));
       setSelectedId(nextId);
     }
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   const promote = useCallback((param: string, on: boolean) => {
+    if (readOnly) return; // read-only canvas: no widget↔input promotion (card S9b)
     setNodes((ns) => ns.map((n) => {
       if (n.id !== selectedId) return n;
       const data = n.data as unknown as NodeData;
@@ -663,7 +685,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
       return { ...n, data: { ...data, promoted } } as unknown as Node;
     }));
     if (!on) setEdges((es) => es.filter((e) => !(e.target === selectedId && e.targetHandle === paramHandle(param))));
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedId || readOnly) return;
@@ -676,25 +698,36 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
 
   // Pass the WHOLE meta (not just id/name) so `description` and `expose_as_tool`
   // survive Save — graphToSpec writes them back onto the spec.
-  const currentSpec = useCallback((): Spec => graphToSpec(asGraph().nodes, asGraph().edges, meta), [asGraph, meta]);
+  const currentSpec = useCallback((): Spec => {
+    const g = asGraph();
+    const graph = graphToSpec(g.nodes, g.edges, { id: "" });
+    if (loaded.current && JSON.stringify(graph) === loaded.current.graph) {
+      return { ...loaded.current.spec, ...meta };
+    }
+    return graphToSpec(g.nodes, g.edges, meta);
+  }, [asGraph, meta]);
 
-  const doSave = useCallback(async (): Promise<Spec | null> => {
-    if (readOnly) return null;
-    const spec = currentSpec();
+  const persistSpec = useCallback(async (spec: Spec, message: string): Promise<Spec | null> => {
     try {
       await savePipeline(spec);
       saveLocalSpec(spec);
       setPipelines(await listPipelines().catch(() => pipelines));
-      toast("Pipeline saved");
+      toast(message);
       return spec;
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
       toast("Could not save — see the error");
       return null;
     }
-  }, [currentSpec, pipelines, toast, readOnly]);
+  }, [pipelines, toast]);
+
+  const doSave = useCallback(async (): Promise<Spec | null> => {
+    if (readOnly) return null;
+    return persistSpec(currentSpec(), "Pipeline saved");
+  }, [currentSpec, persistSpec, readOnly]);
 
   const doNew = useCallback(() => {
+    loaded.current = null;
     setReadOnly(false);
     const id = `untitled_${++pipelineSeq}`;
     setNodes([]); setEdges([]); setSelectedId(null);
@@ -703,15 +736,50 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     setLastOpen(id);
   }, []);
 
-  const doDuplicate = useCallback(() => {
-    setReadOnly(false);
-    const id = slugifyId(`${meta.id}-copy`);
-    // A duplicate is a full copy: keep description/expose_as_tool, only the id
-    // and name change.
-    setMeta((m) => ({ ...m, id, name: `${m.name} (copy)` }));
-    setRunId(null); setRunStatus("idle"); setRunNodes({});
-    toast("Duplicated — save to keep it");
-  }, [meta, toast]);
+  // Duplicate (card S9b): copy the current spec under a fresh id, POST it so the
+  // backend owns an editable (source "saved", read_only false) copy, and open
+  // that copy — the primary path to make a read-only shipped pipeline editable.
+  const doDuplicate = useCallback(async () => {
+    const id = duplicateId(meta.id, pipelines.map((p) => p.id));
+    const name = `${meta.name} (copy)`;
+    const copy: Spec = { ...currentSpec(), id, name };
+    if (await persistSpec(copy, "Duplicated — now editable")) openSpec(copy);
+  }, [currentSpec, meta, pipelines, persistSpec, openSpec]);
+
+  // Delete (card S9b review): remove the OPEN saved pipeline through DELETE
+  // /pipelines/{id}, behind a confirm, then return the canvas to a fresh untitled
+  // pipeline. Only a saved pipeline is deletable — a read-only shipped one has no
+  // Delete, and a bundled starter 400s on the backend — so a Duplicate or a
+  // mistaken Save can always be undone. If it was exposed as an agent tool, the
+  // tool drops on the next agent reload (the reload hint applies).
+  const doDelete = useCallback(async () => {
+    const open = pipelines.find((p) => p.id === meta.id && p.source === "saved" && !p.read_only);
+    if (!open) return;
+    if (!window.confirm(`Delete “${meta.name}”? This can’t be undone.`)) return;
+    try {
+      const res = await deletePipeline(meta.id);
+      deleteLocalSpec(meta.id);
+      setPipelines(await listPipelines().catch(() => pipelines.filter((p) => p.id !== meta.id)));
+      toast(res.expose_as_tool
+        ? "Pipeline deleted — the agent tool is removed after the next reload."
+        : "Pipeline deleted");
+      doNew();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      toast("Could not delete — see the error");
+    }
+  }, [pipelines, meta, toast, doNew]);
+
+  // Commit the flag to local state only after the backend accepts it.
+  const [exposureSaving, setExposureSaving] = useState(false);
+  const setExposeAsTool = useCallback(async (on: boolean) => {
+    if (readOnly || exposureSaving) return;
+    setExposureSaving(true);
+    const spec = { ...currentSpec(), expose_as_tool: on };
+    const saved = await persistSpec(spec, on ? "Exposed as an agent tool" : "No longer an agent tool");
+    if (saved) setMeta((m) => m.id === spec.id ? { ...m, expose_as_tool: on } : m);
+    setExposureSaving(false);
+  }, [currentSpec, persistSpec, readOnly, exposureSaving]);
 
   const doExport = useCallback(() => {
     const spec = currentSpec();
@@ -805,7 +873,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const runSpec = useRef<string | null>(null);
 
   const startRun = useCallback(async () => {
-    const spec = await doSave();
+    // A read-only pipeline already lives on the backend under its id, so run it
+    // directly — Save is forbidden for it (card S9b). An editable one is saved
+    // first so the run uses the freshest spec.
+    const spec = readOnly ? currentSpec() : await doSave();
     if (!spec) return;
     try {
       const rid = await runPipeline(spec.id, {});
@@ -816,7 +887,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
-  }, [doSave, trackRun]);
+  }, [doSave, trackRun, readOnly, currentSpec]);
 
   // Resume only the spec captured by the runner. Edits need a saved fresh run;
   // the backend step cache still serves unchanged upstream nodes.
@@ -876,6 +947,10 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
   const selectedEntry = selectedNode?.data.kind === "op" ? catalog?.find((e) => e.op === (selectedNode.data as OpNodeData).op) : undefined;
   const selectedRun = selectedId ? runNodes[selectedId] : undefined;
   const running = runStatus === "running";
+  // The open pipeline is a deletable SAVED one when it is listed with source
+  // "saved" (a Duplicate or a prior Save) — a bundled starter or a brand-new
+  // untitled pipeline has nothing to delete, and a read-only row hides Delete.
+  const openSaved = pipelines.some((p) => p.id === meta.id && p.source === "saved" && !p.read_only);
 
   const addNodeMenu = (
     <Menu open={addOpen} onOpenChange={setAddOpen} label="Add node" align="start" side="bottom"
@@ -907,12 +982,27 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
         </FormField>
         <div className="pbx-pipeline-actions">
           <Button size="xs" variant="ghost" onClick={doNew}>New</Button>
-          <Button size="xs" variant="ghost" disabled={readOnly} onClick={doSave}>Save</Button>
+          {/* Save is hidden on a read-only pipeline — Duplicate is the only way to
+              persist it (card S9b). */}
+          {!readOnly && <Button size="xs" variant="ghost" onClick={doSave}>Save</Button>}
           <Button size="xs" variant="ghost" onClick={doDuplicate}>Duplicate</Button>
+          {/* Delete the open SAVED pipeline (card S9b review): never on a read-only
+              shipped row, only once there is a saved spec to remove. */}
+          {!readOnly && openSaved && <Button size="xs" variant="ghost" className="pbx-pipeline-delete" onClick={doDelete}>Delete</Button>}
           <Button size="xs" variant="ghost" onClick={doExport}>Export file</Button>
           <Button size="xs" variant="ghost" onClick={() => fileInput.current?.click()}>Import file</Button>
           <Button size="xs" variant="ghost" disabled={readOnly} onClick={doAutoLayout}>Auto-layout</Button>
         </div>
+        {/* Agent-tool exposure (card S9b): editable pipelines only — a read-only
+            one must be Duplicated first. Toggling persists through POST /pipelines
+            and the tool registers on the next agent reload. */}
+        {!readOnly && (
+          <div className="pbx-expose">
+            <Switch ariaLabel="Expose as agent tool" label="Expose as agent tool"
+              checked={Boolean(meta.expose_as_tool)} onChange={setExposeAsTool} />
+            <span className="pbx-field-hint">The tool appears after the next agent reload.</span>
+          </div>
+        )}
         <div className="pbx-pipeline-list" role="listbox" aria-label="Saved pipelines">
           {pipelines.length === 0 ? (
             <p className="hint">No saved pipelines yet.</p>
@@ -920,7 +1010,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
             <button key={p.id} type="button" role="option" aria-selected={p.id === meta.id} className="pbx-pipeline-item"
               onClick={() => loadListed(p)}>
               <span>{p.name}</span>
-              {p.read_only && <Badge className="pbx-ro-badge">read-only</Badge>}
+              {p.read_only && <Badge className="pbx-ro-badge">read-only · {p.source}</Badge>}
             </button>
           ))}
         </div>
@@ -979,12 +1069,16 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
         )}
       </div>
 
-      <fieldset className="pbx-inspector-slot" disabled={readOnly}>
+      {/* The inspector manages its own read-only disabling per control (so Run
+          stays clickable on a read-only pipeline — card S9b); no disabled wrapper
+          fieldset here, which would also disable Run. */}
+      <div className="pbx-inspector-slot">
       <NodeInspector
         node={selectedNode}
         entry={selectedEntry}
         running={running}
         canRerun={Boolean(runId) && (runStatus === "done" || runStatus === "failed")}
+        readOnly={readOnly}
         onPatch={patchSelected}
         onPromote={promote}
         onRun={() => (selectedNode && runId && (runStatus === "done" || runStatus === "failed")) ? runFrom(selectedNode.id) : startRun()}
@@ -993,7 +1087,7 @@ function CanvasInner({ catalog, hidden, onOpenInPlayground, onHistoryChanged }: 
         outputMediaId={selectedRun?.media_id ?? null}
       />
 
-      </fieldset>
+      </div>
 
       <input ref={fileInput} className="visually-hidden" type="file" accept="application/json,.json,.yaml,.yml"
         aria-hidden="true" tabIndex={-1} onChange={(e) => { doImport(e.target.files?.[0]); e.target.value = ""; }} />

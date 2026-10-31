@@ -15,6 +15,7 @@ import hashlib
 import io
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from PIL import Image
@@ -630,3 +631,256 @@ def test_list_includes_full_editable_starter_specs(tmp_path):
         assert spec == mod.pipelines.load_pipeline(item["id"])
         assert len(spec["steps"]) + len(spec.get("inputs", {})) >= 2
         mod.pipelines.validate(spec)
+
+
+# ============================================ S9b: delete a saved pipeline
+
+def test_delete_route_removes_a_saved_pipeline(tmp_path):
+    """A SAVED pipeline (e.g. a Duplicate) can be removed via DELETE; a second
+    delete 404s-as-400 because there's nothing left to remove."""
+    mod, reg = _load(tmp_path)
+
+    async def scenario():
+        async with await _client(_app(reg)) as ac:
+            ok = await ac.post("/api/plugins/protobanana/pipelines", json={
+                "id": "product-sticker-copy",
+                "steps": [{"id": "g", "op": "generate", "params": {"prompt": "a cat"}}]})
+            assert ok.status_code == 200
+            assert "product-sticker-copy" in {p["id"] for p in mod.pipelines.list_pipelines()}
+
+            r = await ac.delete("/api/plugins/protobanana/pipelines/product-sticker-copy")
+            assert r.status_code == 200 and r.json()["deleted"] is True
+            assert "product-sticker-copy" not in {p["id"] for p in mod.pipelines.list_pipelines()}
+            # the saved file is gone from the data dir
+            assert not (tmp_path / "pipelines" / "product-sticker-copy.json").exists()
+
+            # a delete event was announced so a live view can refresh
+            deleted = [d for t, d in reg.emitted if t == "protobanana.pipeline.deleted"]
+            assert deleted and deleted[-1]["id"] == "product-sticker-copy"
+
+            # deleting it again is a 400 (no saved spec to remove)
+            again = await ac.delete("/api/plugins/protobanana/pipelines/product-sticker-copy")
+            assert again.status_code == 400
+
+    asyncio.run(scenario())
+
+
+def test_delete_refuses_a_bundled_starter(tmp_path):
+    """A bundled starter has no saved spec, so DELETE is a 400 and the starter
+    stays listed (only saved pipelines are deletable)."""
+    mod, reg = _load(tmp_path)
+
+    async def scenario():
+        async with await _client(_app(reg)) as ac:
+            r = await ac.delete("/api/plugins/protobanana/pipelines/product-sticker")
+            assert r.status_code == 400 and "read-only" in r.json()["detail"]
+            assert "product-sticker" in {p["id"] for p in mod.pipelines.list_pipelines()}
+
+    asyncio.run(scenario())
+
+
+def test_delete_reports_expose_as_tool_for_the_reload_hint(tmp_path):
+    """The delete result carries the stored ``expose_as_tool`` so the view can
+    decide whether the agent-reload hint applies to a removed exposed pipeline."""
+    mod, _ = _load(tmp_path)
+    mod.pipelines.save_pipeline({
+        "id": "exposed-copy", "expose_as_tool": True,
+        "steps": [{"id": "g", "op": "generate", "params": {"prompt": "a cat"}}]})
+    out = mod.pipelines.delete_pipeline("exposed-copy")
+    assert out == {"id": "exposed-copy", "deleted": True, "expose_as_tool": True}
+
+
+def test_delete_saved_shadow_reveals_the_bundled_starter(tmp_path):
+    """A saved spec that shadows a bundled starter of the same id is removed from
+    the data dir only — the bundled starter re-appears, read_only False."""
+    mod, _ = _load(tmp_path)
+    mod.pipelines.save_pipeline({
+        "id": "product-sticker", "name": "My sticker",
+        "steps": [{"id": "g", "op": "generate", "params": {"prompt": "a cat"}}]})
+    rows = {p["id"]: p for p in mod.pipelines.list_pipelines()}
+    assert rows["product-sticker"]["source"] == "saved"
+
+    mod.pipelines.delete_pipeline("product-sticker")
+    rows = {p["id"]: p for p in mod.pipelines.list_pipelines()}
+    assert rows["product-sticker"]["source"] == "bundled"
+    assert rows["product-sticker"]["read_only"] is False
+
+
+def test_delete_rejects_a_traversing_name(tmp_path):
+    mod, _ = _load(tmp_path)
+    with pytest.raises(mod.pipelines.SpecError):
+        mod.pipelines.delete_pipeline("../secrets")
+
+
+# =============================== S9b: saved pipelines survive a reinstall (#38)
+# pipelines used to write saved specs under <plugin_dir>/.studio/pipelines, INSIDE
+# the installed code dir, so every plugin update/reinstall wiped them (the exact
+# bug #38 fixed for History). configure() now resolves the saved dir via the SAME
+# shared helper history.py uses (graph.sdk.plugin_store), which lives outside the
+# code dir. These tests stub that SDK seam (injected into sys.modules) host-free.
+
+
+def _load_pipelines():
+    """Load the plugin fresh and return its ``pipelines`` submodule, so configure()
+    can be exercised in isolation with a stubbed SDK (its top level is host-free)."""
+    import importlib
+
+    mod = load_plugin(PLUGIN_ROOT, "protobanana")
+    return importlib.import_module(mod.__name__ + ".pipelines")
+
+
+def _fake_sdk(store_path, calls):
+    """A fake ``graph.sdk`` whose ``plugin_store`` mirrors the real signature
+    (``plugin_store(subdir="", *, plugin_id) -> Path``) — the same stub shape
+    test_history uses, so both modules resolve the one per-instance store."""
+    m = ModuleType("graph.sdk")
+
+    def plugin_store(subdir="", *, plugin_id):
+        calls.append(plugin_id)
+        p = Path(store_path)
+        if subdir:
+            p = p / subdir
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    m.plugin_store = plugin_store
+    return m
+
+
+def test_configure_resolves_saved_dir_via_plugin_store(tmp_path, monkeypatch):
+    """Saved specs land in the SDK store's ``pipelines/`` dir, NOT a dot-dir beside
+    the plugin code — so a plugin update/reinstall can't wipe them (#38)."""
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    calls = []
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, calls))
+
+    code = tmp_path / "code"
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    pl.configure(reg)  # no data_dir → real resolution via the shared helper
+
+    assert pl._saved_dir == store / "pipelines"          # the SDK store, not the code dir
+    assert pl._saved_dir != code / ".studio" / "pipelines"
+    assert calls == ["protobanana"]                      # plugin_store(plugin_id=registry.plugin_id)
+
+    pl.save_pipeline({"id": "mine",
+                      "steps": [{"id": "g", "op": "generate", "params": {"prompt": "a cat"}}]})
+    assert (store / "pipelines" / "mine.json").is_file()  # saved under the store
+    assert not (code / ".studio").exists()                # nothing written beside the code
+
+
+def test_configure_migrates_legacy_saved_pipelines(tmp_path, monkeypatch):
+    """A pre-fix ``<plugin_dir>/.studio/pipelines/*.json`` is COPIED into an empty
+    SDK store on configure; the legacy file is left in place."""
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    spec = ('{"id": "old-copy", "steps": [{"id": "g", "op": "generate", '
+            '"params": {"prompt": "x"}}]}')
+    (legacy / "old-copy.json").write_text(spec, encoding="utf-8")
+
+    pl.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=code))
+
+    assert (store / "pipelines" / "old-copy.json").is_file()   # migrated in
+    assert (legacy / "old-copy.json").is_file()                # legacy NOT deleted
+    assert "old-copy" in {p["id"] for p in pl.list_pipelines()}
+
+
+def test_migration_does_not_overwrite_an_existing_saved_spec(tmp_path, monkeypatch):
+    """An id already saved in the store is never overwritten by the legacy copy."""
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    (store / "pipelines").mkdir(parents=True)
+    (store / "pipelines" / "dup.json").write_text(
+        '{"id": "dup", "name": "store", "steps": [{"id": "g", "op": "generate"}]}',
+        encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    (legacy / "dup.json").write_text(
+        '{"id": "dup", "name": "legacy", "steps": [{"id": "g", "op": "generate"}]}',
+        encoding="utf-8")
+
+    pl.configure(FakeRegistry(plugin_id="protobanana", plugin_dir=code))
+    rows = {p["id"]: p for p in pl.list_pipelines()}
+    assert rows["dup"]["name"] == "store"  # the store spec wins; no overwrite
+
+
+@pytest.mark.parametrize("extension", [".json", ".yaml", ".yml"])
+def test_deleted_migrated_pipeline_stays_deleted_after_restart(tmp_path, monkeypatch, extension):
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    spec = ('{"id": "old-copy", "expose_as_tool": true, "steps": '
+            '[{"id": "g", "op": "generate", "params": {"prompt": "x"}}]}')
+    source = legacy / f"old-copy{extension}"
+    source.write_text(spec, encoding="utf-8")
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    pl.configure(reg)
+    assert "pipeline_old_copy" in {t.name for t in pl.pipeline_tool_factory([], {})}
+    assert pl.delete_pipeline("old-copy")["deleted"]
+
+    # Reload the module as well as configure: deletion must persist on disk.
+    pl = _load_pipelines()
+    pl.configure(reg)
+    assert source.read_text(encoding="utf-8") == spec
+    assert "old-copy" not in {p["id"] for p in pl.list_pipelines()}
+    assert "pipeline_old_copy" not in {t.name for t in pl.pipeline_tool_factory([], {})}
+    assert not (store / "pipelines" / source.name).exists()
+
+    # A deliberate new save with the same id remains supported.
+    pl.save_pipeline({"id": "old-copy", "steps": [{"id": "g", "op": "generate"}]})
+    pl.configure(reg)
+    assert "old-copy" in {p["id"] for p in pl.list_pipelines()}
+    pl.delete_pipeline("old-copy")
+    pl.configure(reg)
+    assert "old-copy" not in {p["id"] for p in pl.list_pipelines()}
+
+
+def test_migration_retry_does_not_restore_deleted_partial_import(tmp_path, monkeypatch):
+    pl = _load_pipelines()
+    store = tmp_path / "sdk-store"
+    monkeypatch.setitem(sys.modules, "graph.sdk", _fake_sdk(store, []))
+    code = tmp_path / "code"
+    legacy = code / ".studio" / "pipelines"
+    legacy.mkdir(parents=True)
+    for name in ("a", "b"):
+        (legacy / f"{name}.json").write_text(
+            '{"id": "' + name + '", "steps": [{"id": "g", "op": "generate"}]}',
+            encoding="utf-8")
+    copyfile = pl.shutil.copyfile
+
+    def fail_second(src, dst):
+        if src.name == "b.json":
+            raise OSError("interrupted migration")
+        return copyfile(src, dst)
+
+    reg = FakeRegistry(plugin_id="protobanana", plugin_dir=code)
+    with monkeypatch.context() as patch:
+        patch.setattr(pl.shutil, "copyfile", fail_second)
+        pl.configure(reg)
+    assert {p["id"] for p in pl.list_pipelines()} == {"a"}
+    pl.delete_pipeline("a")
+    pl.configure(reg)
+    assert {p["id"] for p in pl.list_pipelines()} == {"b"}
+
+
+def test_delete_keeps_spec_when_deletion_marker_cannot_be_written(tmp_path):
+    mod, _ = _load(tmp_path)
+    pl = mod.pipelines
+    pl.save_pipeline({"id": "mine", "steps": [{"id": "g", "op": "generate"}]})
+    # A file in place of the marker directory simulates a failed marker write.
+    (tmp_path / "pipelines" / ".deleted-legacy").write_text("blocked", encoding="utf-8")
+    with pytest.raises(pl.SpecError, match="could not delete"):
+        pl.delete_pipeline("mine")
+    assert (tmp_path / "pipelines" / "mine.json").is_file()
+    assert "mine" in {p["id"] for p in pl.list_pipelines()}

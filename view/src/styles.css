@@ -1898,11 +1898,14 @@ fieldset {
   overflow: auto;
 }
 
+/* The row STACKS the "read-only · <source>" badge under the name (card S9b
+ * review item 3): side-by-side, a long source clipped at the popover's right
+ * edge; a column gives the badge the full row width so it is never cut off. */
 .pbx-pipeline-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   padding: 6px 8px;
   text-align: left;
   color: var(--fg);
@@ -1916,12 +1919,35 @@ fieldset {
   background: var(--bg-hover);
 }
 
+/* The name truncates (full row width) so it can't push the row wider than the
+ * popover column (card S9b rule 2 — no overflow). */
+.pbx-pipeline-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On its own line, left-aligned, only as wide as its text and never past the
+ * row — so the badge stays inside the popover panel at every width. */
 .pbx-ro-badge {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 9px;
 }
 
 .pbx-inspector-slot { margin: 0; padding: 0; border: 0; min-width: 0; flex: 0 0 auto; }
 .pbx-inspector--empty { min-height: 150px; }
+
+/* A borderless fieldset: it disables a whole param block at once (read-only
+ * pipelines, S9b) — including the Segmented/Switch stand-ins that don't take a
+ * `disabled` prop — without the browser's default fieldset chrome. */
+.pbx-inspector-fields { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+
+/* The expose-as-tool toggle and its reload hint in the pipeline popover (S9b). */
+.pbx-expose { display: grid; gap: 4px; }
 
 /* xyflow's built-in input class also matches our custom typed input renderer. */
 .pbx-flow .react-flow__node-input {

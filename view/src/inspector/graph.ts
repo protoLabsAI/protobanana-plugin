@@ -82,11 +82,28 @@ export function slotFlags(slots: WorkflowSlot[] | undefined): {
 // Top→bottom dependency ranks suit the tall drawer. Center each rank under the
 // widest one; disconnected loaders remain on the first rank. The canvas owns
 // pan/zoom when a larger workflow cannot fit at a readable scale.
-const WF_COL = 280;
+const WF_NODE_W = 250; // matches .pbx-wf-node width
+const WF_GAP = 30; // horizontal gutter between columns
+const WF_COL = WF_NODE_W + WF_GAP; // 280: column pitch (node width + gap)
 const WF_ROW = 150;
 const WF_ORIGIN = 24;
+// The most zoomed-out initial scale: equals the ReactFlow minZoom and the fit
+// minZoom, so it is the worst case for a rank spilling past the Drawer's edges.
+const WF_INIT_ZOOM = 0.7;
 
-function layout(ids: string[], links: WorkflowLink[]): Record<string, { x: number; y: number }> {
+/** How many nodes fit on one rank inside a Drawer of ``drawerWidth`` px at the
+ *  initial zoom: ``floor(drawerWidth / (nodeWidth + gap))`` measured at that
+ *  zoom. A rank wider than this wraps onto extra rows so it never overflows the
+ *  Drawer on open (Studio S10 review item 3). Never below 1. */
+export function wfMaxPerRow(drawerWidth: number): number {
+  return Math.max(1, Math.floor(drawerWidth / (WF_COL * WF_INIT_ZOOM)));
+}
+
+function layout(
+  ids: string[],
+  links: WorkflowLink[],
+  maxPerRow: number,
+): Record<string, { x: number; y: number }> {
   const incoming: Record<string, string[]> = {};
   for (const id of ids) incoming[id] = [];
   for (const l of links) incoming[l.target]?.push(l.source);
@@ -105,16 +122,29 @@ function layout(ids: string[], links: WorkflowLink[]): Record<string, { x: numbe
   }
   const layers: Record<number, string[]> = {};
   for (const id of ids) (layers[depth[id]] ||= []).push(id);
-  const widest = Math.max(0, ...Object.values(layers).map((layer) => layer.length));
+  // Flatten depth ranks to visual rows, wrapping any rank wider than the Drawer
+  // into ``ceil(count / maxPerRow)`` stacked rows (review item 3). Deeper ranks
+  // shift down by the extra rows a shallower rank introduced; because the whole
+  // of rank d precedes rank d+1, every edge still points from a lower row to a
+  // higher one (top→bottom preserved).
+  const cap = Math.max(1, maxPerRow);
+  const rows: string[][] = [];
+  for (const d of Object.keys(layers).map(Number).sort((a, b) => a - b)) {
+    const layer = layers[d];
+    for (let i = 0; i < layer.length; i += cap) rows.push(layer.slice(i, i + cap));
+  }
+  const widest = Math.max(0, ...rows.map((row) => row.length));
   const pos: Record<string, { x: number; y: number }> = {};
-  for (const [d, layerIds] of Object.entries(layers)) {
-    layerIds.forEach((id, i) => {
+  rows.forEach((row, r) => {
+    row.forEach((id, i) => {
+      // Center each row under the widest one so the graph bbox is symmetric and
+      // the initial fit sits centered horizontally in the Drawer.
       pos[id] = {
-        x: WF_ORIGIN + (i + (widest - layerIds.length) / 2) * WF_COL,
-        y: WF_ORIGIN + Number(d) * WF_ROW,
+        x: WF_ORIGIN + (i + (widest - row.length) / 2) * WF_COL,
+        y: WF_ORIGIN + r * WF_ROW,
       };
     });
-  }
+  });
   return pos;
 }
 
@@ -128,13 +158,18 @@ export interface WfNodeData {
 
 /** Build the read-only xyflow graph from the API payload: a node per
  *  ``class_type`` (laid out top→bottom), an edge per API input link, and the
- *  slot nodes flagged. */
-export function buildWorkflowGraph(payload: WorkflowPayload): { nodes: Node[]; edges: Edge[] } {
+ *  slot nodes flagged. ``maxPerRow`` caps how many nodes a dependency rank may
+ *  place on one row before wrapping (review item 3); the default leaves the
+ *  canvas unbounded — the Drawer passes the measured width-derived cap. */
+export function buildWorkflowGraph(
+  payload: WorkflowPayload,
+  maxPerRow = Infinity,
+): { nodes: Node[]; edges: Edge[] } {
   const entries = workflowNodeEntries(payload.workflow);
   const ids = entries.map(([id]) => id);
   const links = workflowLinks(payload.workflow);
   const { nodeIds: slotNodeIds, inputsByNode } = slotFlags(payload.slots);
-  const pos = layout(ids, links);
+  const pos = layout(ids, links, maxPerRow);
   const nodes: Node[] = entries.map(([id, node]) => ({
     id,
     type: "wf",

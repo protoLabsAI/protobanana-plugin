@@ -6,6 +6,7 @@ import type { CatalogEntry, HistoryRecord, WorkflowPayload } from "../src/api";
 import {
   buildWorkflowGraph,
   slotFlags,
+  wfMaxPerRow,
   workflowDoc,
   workflowLinks,
 } from "../src/inspector/graph";
@@ -30,14 +31,17 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><r
 const ALIAS = "protolabs/qwen-image";
 const WH = "sha256:wh1";
 
-// Eight nodes across five dependency ranks exercise the drawer at realistic
-// graph dimensions, including multiple loaders and the width/height slot label.
+// Nine nodes across five dependency ranks exercise the drawer at realistic graph
+// dimensions. The first rank holds FOUR loaders (EmptyLatentImage, two *Loaders,
+// VAELoader) — wider than the 720px drawer at the 0.7 min zoom — so it also
+// exercises the rank-wrapping (review item 3); plus the width/height slot label.
 const WORKFLOW: Omit<WorkflowPayload, "comfy_ui_url"> = {
   workflow: {
     _doc: "Qwen-Image text-to-image. Prompt and seed are substituted per render.",
     "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "qwen" } },
     "10": { class_type: "VAELoader", inputs: { vae_name: "qwen" } },
     "5": { class_type: "EmptyLatentImage", inputs: { width: 1024, height: 1024 } },
+    "11": { class_type: "CLIPLoader", inputs: { clip_name: "qwen" } },
     "7": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["4", 1] } },
     "6": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["4", 1] } },
     "3": { class_type: "KSampler", inputs: { seed: 0, model: ["4", 0], positive: ["6", 0], negative: ["7", 0], latent_image: ["5", 0] } },
@@ -80,8 +84,9 @@ test("slot nodes and their substituted inputs are flagged", () => {
 });
 
 test("buildWorkflowGraph labels nodes by class_type, flags slots and lays out top→bottom", () => {
+  // Default (unbounded canvas): no wrapping, one row per dependency rank.
   const { nodes, edges } = buildWorkflowGraph({ ...WORKFLOW, comfy_ui_url: "" });
-  expect(nodes).toHaveLength(8);
+  expect(nodes).toHaveLength(9);
   expect(edges).toHaveLength(9);
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n.data as Record<string, unknown>]));
   expect(byId["3"].label).toBe("KSampler");
@@ -93,9 +98,34 @@ test("buildWorkflowGraph labels nodes by class_type, flags slots and lays out to
   for (const edge of edges) {
     expect(positions[edge.source].y).toBeLessThan(positions[edge.target].y);
   }
-  for (const id of ["4", "5", "10"]) expect(positions[id].y).toBe(24);
+  // All four depth-0 loaders share the first rank; five ranks, five rows.
+  for (const id of ["4", "5", "10", "11"]) expect(positions[id].y).toBe(24);
   expect(new Set(nodes.map((n) => n.position.y)).size).toBe(5);
   expect(positions["4"].x).not.toBe(positions["10"].x);
+});
+
+test("a rank wider than the drawer wraps onto extra rows (no overflow on open)", () => {
+  // wfMaxPerRow(720) == floor(720 / (280 * 0.7)) == 3, so the four-loader first
+  // rank wraps into 3 + 1. The widest row never exceeds the cap, and every edge
+  // still points downward (top→bottom preserved across the wrap).
+  const cap = wfMaxPerRow(720);
+  expect(cap).toBe(3);
+  const { nodes, edges } = buildWorkflowGraph({ ...WORKFLOW, comfy_ui_url: "" }, cap);
+  const positions = Object.fromEntries(nodes.map((n) => [n.id, n.position]));
+  const firstRank = ["4", "10", "5", "11"].map((id) => positions[id].y);
+  expect(new Set(firstRank).size).toBe(2); // the four loaders now occupy two rows
+  // No row holds more than the cap.
+  const perRow: Record<number, number> = {};
+  for (const n of nodes) perRow[n.position.y] = (perRow[n.position.y] || 0) + 1;
+  for (const count of Object.values(perRow)) expect(count).toBeLessThanOrEqual(cap);
+  for (const edge of edges) {
+    expect(positions[edge.source].y).toBeLessThan(positions[edge.target].y);
+  }
+  // Narrower drawers wrap harder; a wide one leaves the rank intact; never < 1.
+  expect(wfMaxPerRow(760)).toBe(3);
+  expect(wfMaxPerRow(300)).toBe(1);
+  expect(wfMaxPerRow(10)).toBe(1);
+  expect(wfMaxPerRow(2000)).toBeGreaterThanOrEqual(4);
 });
 
 test("workflowDoc reads the _doc header and tolerates its absence", () => {
@@ -179,7 +209,7 @@ test("the drawer renders the workflow read-only: class_type nodes, API edges, fl
   // _doc as the header.
   await expect(drawer(page)).toContainText("Qwen-Image text-to-image");
   // one node per class_type, labelled by class_type.
-  await expect(page.locator(".pbx-wf-node")).toHaveCount(8);
+  await expect(page.locator(".pbx-wf-node")).toHaveCount(9);
   await expect(page.locator(".pbx-wf-node-title").filter({ hasText: "KSampler" })).toBeVisible();
   // slots flagged (not by colour alone — a data flag and a visible "slot" tag).
   await expect(page.locator('.pbx-wf-node[data-slot="true"]')).toHaveCount(3);
@@ -226,6 +256,19 @@ for (const width of [1440, 760]) {
       // The info popover doesn't overflow the view.
       within((await page.locator(".image-info").boundingBox())!);
 
+      // Review item 3: EVERY node's bounding box stays horizontally inside the
+      // Drawer. The first rank (four loaders) is wider than the Drawer at the
+      // 0.7 min zoom, so without wrapping its edge nodes would be clipped left
+      // and right. Poll so the check runs once the fit transform has settled.
+      const assertNodesInsideDrawer = async () => {
+        await expect.poll(async () => {
+          const boxes = await page.locator(".pbx-wf-node").evaluateAll((els) =>
+            els.map((el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right }; }));
+          return boxes.length === 9
+            && boxes.every((b) => b.l >= dBox.x - 1 && b.r <= dBox.x + dBox.width + 1);
+        }).toBe(true);
+      };
+
       // Measure screen text after xyflow finishes its initial fit, and after Fit.
       const assertReadable = async () => {
         await expect.poll(async () => page.locator(".pbx-wf-flow .react-flow__viewport").evaluate((el) =>
@@ -244,8 +287,10 @@ for (const width of [1440, 760]) {
         }
       };
       await assertReadable();
+      await assertNodesInsideDrawer();
       await page.getByRole("button", { name: "Fit workflow to view", exact: true }).click();
       await assertReadable();
+      await assertNodesInsideDrawer();
 
       // Both the floating toolbar and the header Close tooltip must be visible
       // and fully inside the viewport (do not silently skip missing tooltips).

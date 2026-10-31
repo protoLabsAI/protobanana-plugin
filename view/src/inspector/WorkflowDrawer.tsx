@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -25,7 +25,7 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from "../ds-pending";
-import { buildWorkflowGraph, workflowDoc, type WfNodeData } from "./graph";
+import { buildWorkflowGraph, wfMaxPerRow, workflowDoc, type WfNodeData } from "./graph";
 
 // ------------------------------------------------------------------ node view
 
@@ -73,10 +73,35 @@ function WorkflowToolbar() {
 }
 
 function WorkflowGraph({ payload }: { payload: WorkflowPayload }) {
-  const { nodes, edges } = useMemo(() => buildWorkflowGraph(payload), [payload]);
+  const flowRef = useRef<HTMLDivElement>(null);
+  // How many nodes fit per rank depends on the LIVE Drawer width (min(720,50vw)
+  // wide, 100vw narrow), so measure the flow container and wrap any rank that
+  // would otherwise spill past the Drawer's edges at the initial zoom (review
+  // item 3). Start from the widest the Drawer can be; the layout effect corrects
+  // to the real width before paint.
+  const [maxPerRow, setMaxPerRow] = useState(() => wfMaxPerRow(720));
+  useLayoutEffect(() => {
+    const el = flowRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) setMaxPerRow(wfMaxPerRow(w));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const { nodes, edges } = useMemo(
+    () => buildWorkflowGraph(payload, maxPerRow),
+    [payload, maxPerRow],
+  );
   return (
-    <div className="pbx-wf-flow">
-      <ReactFlowProvider>
+    <div className="pbx-wf-flow" ref={flowRef}>
+      {/* Remount on a wrap change so the initial `fitView` re-runs (after xyflow
+          re-measures the new layout) and re-centres the graph in the Drawer. */}
+      <ReactFlowProvider key={maxPerRow}>
         <ReactFlow
           nodes={nodes}
           edges={edges}

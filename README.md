@@ -75,6 +75,10 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 
 ## Versions
 
+- **0.7.1** — Images view fixes: a render the agent makes from chat lands live in the
+  open Images view (new `protobanana.agent.render` bus event; the view's bus subscription
+  now uses the console's `patterns` shape, so job and pipeline events arrive live too).
+  An open edit composer shrinks the stage instead of scrolling the image out of view.
 - **0.7.0** — `image-capabilities` skill: the agent can explain what it can do with
   images (operations, models, timings, limits, masks, Studio) and pick the right tool.
   `inpaint_image` accepts black/white masks (white = edit) as the gateway does.

@@ -279,10 +279,11 @@ def _primary_ref(params: dict):
     return ref
 
 
-def record_agent(media_id: str, meta: dict | None) -> None:
+def record_agent(media_id: str, meta: dict | None) -> dict | None:
     """Write a ``source="agent"`` record from an agent tool's ``save_media``
     meta. Wrapped so a malformed meta (or a raising ``append``) can never
-    propagate into the tool (tools never raise).
+    propagate into the tool (tools never raise). Returns the record for bus
+    notifications so their metadata matches the index exactly.
 
     The record's ``params`` is the agent meta minus the two meta-only keys
     (``tool`` → ``op``, ``model`` → ``alias``). Everything else — crucially the
@@ -294,7 +295,7 @@ def record_agent(media_id: str, meta: dict | None) -> None:
         meta = dict(meta or {})
         tool = meta.get("tool") or ""
         params = {k: v for k, v in meta.items() if k not in ("tool", "model")}
-        append({
+        record = {
             "media_id": media_id,
             "parent_id": _media_id_of(_primary_ref(params)),
             "op": _TOOL_OP.get(tool, tool or "unknown"),
@@ -304,7 +305,9 @@ def record_agent(media_id: str, meta: dict | None) -> None:
             "job_id": None,
             "created": time.time(),
             "starred": False,
-        })
+        }
+        append(record)
+        return record
     except Exception:  # noqa: BLE001 - a tool must never raise on history
         log.exception("[protobanana] record_agent failed")
 

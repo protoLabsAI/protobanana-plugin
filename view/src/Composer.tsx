@@ -124,6 +124,7 @@ export function Composer({
   onMarginsChange,
   records,
   onSubmit,
+  onDirtyChange,
 }: {
   catalog: CatalogEntry[] | null;
   hasImage: boolean;
@@ -138,6 +139,7 @@ export function Composer({
   onMarginsChange: (margins: Margins) => void;
   records: HistoryRecord[];
   onSubmit: (req: JobRequest) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const op = opFor(hasImage, mode);
   const entry = catalog?.find((e) => e.op === op);
@@ -151,6 +153,18 @@ export function Composer({
   const [grounding, setGrounding] = useState("");
   const [references, setReferences] = useState<string[]>(["", ""]);
   const lastSeed = useRef<number | null>(null);
+  // Retain submitted values for reruns, but only unsubmitted input makes the
+  // composer busy. New edits during a render must remain dirty when it finishes.
+  const [submitted, setSubmitted] = useState({ prompt: "", avoid: "", seedInput: "" });
+
+  useEffect(() => {
+    onDirtyChange?.(Boolean(
+      (prompt && prompt !== submitted.prompt) ||
+      (avoid && avoid !== submitted.avoid) ||
+      (seedInput && seedInput !== submitted.seedInput) ||
+      grounding || references.some(Boolean) || Object.values(margins).some(Boolean)
+    ));
+  }, [prompt, avoid, seedInput, submitted, grounding, references, margins, onDirtyChange]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -216,6 +230,7 @@ export function Composer({
     // Generation always starts a new root, even with an expired History selection.
     const parent_id = entry.op === "generate" ? undefined : parentId || undefined;
     onSubmit({ op: entry.op, tier: quality, alias: selectedAlias || undefined, params, parent_id });
+    setSubmitted({ prompt, avoid, seedInput });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

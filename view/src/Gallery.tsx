@@ -14,7 +14,7 @@ import { Badge, Button, DropdownSelect, PanelHeader, Popover, Segmented, Skeleto
 // (or a Drawer when the view is narrow — §8). A 3-column thumb grid; selecting a
 // thumb makes it the current image. A pruned record (store original gone, not
 // starred) renders a "pruned" tile and, when selected, the canvas shows the
-// expired Empty. Refreshes on protobanana.job.done and on the shell's revision.
+// expired Empty. Refreshes on job.done, agent.render and the shell's revision.
 
 const PAGE = 48;
 
@@ -205,7 +205,8 @@ export function Gallery({
     const off = subscribe("protobanana.job.done", () => {
       reload();
     });
-    return off;
+    const offAgent = subscribe("protobanana.agent.render", () => { reload(); });
+    return () => { off(); offAgent(); };
   }, [reload]);
 
   const filterActive = filters.op !== "" || filters.source !== "" || filters.starredOnly;

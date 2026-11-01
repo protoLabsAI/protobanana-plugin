@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>api.ts subscribe harness</title>
+  </head>
+  <body>
+    <!-- Imports ONLY api.ts (not the app) so the shared subscribe() map starts
+         empty and the subscribe/unsubscribe pattern frames can be asserted in
+         isolation. ready() is never called, so subscribe() takes the postMessage
+         bridge (no _kit.subscribe) — exactly the path that reaches the host. -->
+    <script type="module">
+      import { subscribe } from "/src/api.ts";
+      window.__subscribe = subscribe;
+    </script>
+  </body>
+</html>

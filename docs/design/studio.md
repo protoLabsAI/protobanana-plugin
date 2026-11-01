@@ -345,6 +345,14 @@ dir, holding records that point at media ids. Agent tool calls write the same re
 `source: "agent"`, so **one history serves both**. This needs **no core list API**. The core
 store stays the bytes; the plugin owns the index.
 
+**Live agent renders:**
+
+After recording an agent image, `protobanana.agent.render` emits
+`{media_id, url, op, parent_id, alias, created}` through the registry. The Images
+view refreshes History and Lineage and lands the image when idle. While a view
+job, typed composer input, or unsaved mask is present, it offers a non-modal
+“Agent render added to History” toast with a Show action instead.
+
 ### 3.2 Layer (b): Pipelines, a node graph over *our* operations (ship second)
 
 This is the "feels like ComfyUI" layer, but at the right altitude:
@@ -441,7 +449,7 @@ planned.
 | **Agent opens the Studio** ("open that in the studio", "open pipeline X") | A `protobanana-ref` chip in the chat transcript that opens the view on a media id or pipeline. Today a git-installed plugin **cannot** do this: chips need a `src/ext` renderer, and frame components can't open views | **Yes, a small generic core seam:** a core `plugin-view-ref` component kind (like `code-ref`) **or** a `protoComponent:openView {view, message}` frame message routed to `postToPluginView`. Benefits every plugin (campaign, board) |
 | **Pipeline as a reusable tool/skill** | `run_pipeline` / `list_pipelines` tools + a bundled `SKILL.md`. Optionally, per-pipeline tools via `register_late_tool_factory` | None |
 | **Agent authors a pipeline** | A `save_pipeline(spec)` tool validated by the same schema. The view live-updates through the bus (`protobanana.pipeline.saved`) | None |
-| **Bus events for other plugins** (brandLaunch/campaign consuming renders) | `emits: [protobanana.job.done, protobanana.pipeline.run.done]` in the manifest | None |
+| **Bus events for other plugins** (brandLaunch/campaign consuming renders) | `emits: [protobanana.job.done, protobanana.agent.render, protobanana.pipeline.run.done]` in the manifest | None |
 
 The rule from the "don't rebuild core in a plugin" note applies. The Studio **never grows a
 chat box or a prompt-helper LLM pane.** "Help me write a prompt" is "send to agent". The view

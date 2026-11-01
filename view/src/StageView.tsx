@@ -167,7 +167,10 @@ export function StageView({
   }, [current, editRef]);
 
   // Measure the viewport (its content box, inside the stage border) so fit and
-  // the cursor math use the box the image actually occupies.
+  // the cursor math use the box the image actually occupies. The ResizeObserver
+  // also re-measures when the stage SHRINKS to make room for an open composer
+  // (styles.css: the stage is the flexible row down to a floor), so fit stays
+  // correct as the box changes without any extra wiring.
   useLayoutEffect(() => {
     const el = vpRef.current;
     if (!el) { setBox(undefined); return; }

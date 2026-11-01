@@ -1131,6 +1131,43 @@ body {
   }
 }
 
+/* An open edit composer (Region/Edit/Inpaint/Outpaint) makes the rows below the
+ * stage tall enough to overflow the Playground column. Rather than SCROLL the
+ * column — which pushes the stage, its view toolbar and the image's top under
+ * the view header — the stage absorbs the space: it is the single row that grows
+ * AND shrinks, down to a floor that keeps its toolbar visible. The rows below
+ * keep their natural height; the lineage strip yields only as a last resort
+ * (viewports too short for even the floor). Scoped to >=480px so the <480
+ * aspect-ratio stage below is untouched, and to the Playground `.canvas` so the
+ * Pipelines graph canvas (also `.stage`) is not. */
+@container (min-width: 480px) {
+  .canvas:not(.pbx-pipelines) > .stage {
+    /* basis == floor: the stage grows to fill, but a negative-space pass clamps
+     * it here and freezes it, so the lineage (not the stage) gives up the rest. */
+    flex: 1 1 140px;
+    min-height: 140px;
+  }
+  .canvas:not(.pbx-pipelines) > .banner,
+  .canvas:not(.pbx-pipelines) > .unreachable,
+  .canvas:not(.pbx-pipelines) > .action-bar,
+  .canvas:not(.pbx-pipelines) > .composer {
+    flex-shrink: 0;
+  }
+  .canvas:not(.pbx-pipelines) > .lineage {
+    flex-shrink: 1;
+    min-height: 0;
+  }
+  /* Clip the thumbnail row itself (not the whole section) when the strip
+   * yields, so the variants popover — an inline, absolutely-positioned
+   * descendant of .lineage — is never clipped with it. align-self:stretch
+   * makes the row track the (shrunk) section height so overflow-y can bite. */
+  .canvas:not(.pbx-pipelines) > .lineage > .pbx-scroll-area {
+    align-self: stretch;
+    min-height: 0;
+    overflow-y: hidden;
+  }
+}
+
 @container (max-width: 479px) {
   .stage {
     flex: none;

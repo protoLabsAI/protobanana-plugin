@@ -1205,6 +1205,70 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+// Bug (caught on camera by brandLaunch, 2026-11-01): at a 1280x720 console
+// viewport with the right Work panel (History) open, opening an edit composer
+// made the Playground canvas column taller than its box, so it scrolled — the
+// stage, its view toolbar and the image's top slid under the view header as the
+// caret came into view. The stage must shrink to a floor instead, so the column
+// never scrolls and the stage (with its toolbar) stays fully visible.
+for (const composer of ["Region", "Edit", "Inpaint", "Outpaint"] as const) {
+  test(`open ${composer} composer at 1280x720 never scrolls the Playground column`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await setup(page);
+    // The Work panel (History) is open at this width (>= NARROW_PX), i.e. the
+    // two-column layout the bug was measured in.
+    await expect(page.locator(".history-col")).toBeVisible();
+    await pickTile(page, 0); // root (640x480): current image + action bar + lineage show
+    await expect(bar(page)).toBeVisible();
+
+    // Open the edit composer (plus the field each one adds, to match the scene).
+    await bar(page).getByRole("button", { name: composer, exact: true }).click();
+    if (composer === "Region") await page.getByLabel("What to change?", { exact: true }).fill("the gnome's hat");
+    if (composer === "Outpaint") await page.getByLabel("Right", { exact: true }).fill("128");
+    await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
+    // The stage keeps its floating view toolbar (it must stay on screen).
+    await expect(page.getByRole("toolbar", { name: "View controls", exact: true })).toBeVisible();
+
+    // Type a long instruction and keep the textarea focused — the pre-fix bug
+    // scrolled the column to bring the caret into view.
+    await prompt(page).click();
+    await prompt(page).fill(
+      "Make the gnome's pointed hat a deep cobalt blue with a soft velvet sheen, " +
+      "add a thin golden trim along its brim, and keep the rest of the scene exactly as it is.",
+    );
+
+    const geometry = await page.evaluate(() => {
+      const canvas = document.querySelector(".canvas:not(.pbx-pipelines)") as HTMLElement;
+      const stage = canvas.querySelector(":scope > .stage") as HTMLElement;
+      const header = document.querySelector(".pbx-panel-header") as HTMLElement;
+      const toolbar = stage.querySelector(".view-toolbar") as HTMLElement;
+      // Try to scroll the column to the bottom: with no overflow it stays pinned.
+      canvas.scrollTop = 9999;
+      const stageBox = stage.getBoundingClientRect();
+      const headerBox = header.getBoundingClientRect();
+      const toolbarBox = toolbar.getBoundingClientRect();
+      return {
+        scrollHeight: canvas.scrollHeight, clientHeight: canvas.clientHeight, scrollTop: canvas.scrollTop,
+        stageTop: stageBox.top, stageBottom: stageBox.bottom, stageHeight: stageBox.height,
+        headerBottom: headerBox.bottom, toolbarTop: toolbarBox.top, toolbarBottom: toolbarBox.bottom,
+      };
+    });
+
+    // The column does not scroll (the acceptance criterion).
+    expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+    expect(geometry.scrollTop).toBe(0);
+    // The stage top edge and its view toolbar stay fully visible below the header.
+    expect(geometry.stageTop).toBeGreaterThanOrEqual(geometry.headerBottom - 1);
+    expect(geometry.toolbarTop).toBeGreaterThanOrEqual(geometry.headerBottom - 1);
+    expect(geometry.toolbarBottom).toBeLessThanOrEqual(geometry.stageBottom + 1);
+    // The stage never shrinks below its ~140px floor.
+    expect(geometry.stageHeight).toBeGreaterThanOrEqual(139);
+    // The pinned case: the Region composer overflowed the 260px-default stage,
+    // so the fix must have shrunk it below that default (not just not-scrolled).
+    if (composer === "Region") expect(geometry.stageHeight).toBeLessThan(260);
+  });
+}
+
 // A forest: two independent root generations plus a real fork under the first
 // root. A root has NO parent, so selecting it must not fork into the unrelated
 // second root; only the shared-parent children count as variants. (Regression

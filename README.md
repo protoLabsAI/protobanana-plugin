@@ -75,6 +75,9 @@ Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent
 
 ## Versions
 
+- **0.7.2** — Images view: while an edit renders with its composer open (a short stage),
+  the render status is a slim strip along the stage's bottom edge instead of a card that
+  covered the image, so the image being edited stays visible.
 - **0.7.1** — Images view fixes: a render the agent makes from chat lands live in the
   open Images view (new `protobanana.agent.render` bus event; the view's bus subscription
   now uses the console's `patterns` shape, so job and pipeline events arrive live too).

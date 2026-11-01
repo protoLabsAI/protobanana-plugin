@@ -199,3 +199,60 @@ def test_reference_chip_is_built_and_uses_the_nonce_bound_bridge():
     assert "protoComponent:init" in chip
     assert "protoComponent:bridgeResult" in chip
     assert "protobanana:focus" in chip
+
+
+# ---------------------------------------------------- Playground stage layout
+
+
+def _css_slice(css: str, start_marker: str) -> str:
+    """The text of a `@container` block, comments stripped and whitespace
+    normalised to single spaces, so structural asserts don't depend on the
+    source's exact indentation or the explanatory comments inside the rules."""
+    i = css.index(start_marker)
+    j = css.find("@container", i + len(start_marker))
+    block = css[i: j if j != -1 else len(css)]
+    block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+    return re.sub(r"\s+", " ", block)
+
+
+def test_playground_stage_shrinks_to_a_floor_so_the_column_never_scrolls():
+    """The filmed bug (2026-11-01): opening an edit composer in the Images view
+    Playground made the `.canvas` column taller than its box, so it scrolled and
+    pushed the stage — its view toolbar and the image's top — under the view
+    header. The fix makes the stage the single flexible row: at the view's own
+    width >= 480px it shrinks to a ~140px floor, and the lineage strip is the
+    sole last-resort yielder, so the column never scrolls with any composer open.
+
+    Playwright pins the live geometry (view/tests/stageLayout.spec.ts) but does
+    not run in the Python gate; this host-free guard is the CI backstop that a
+    future edit can't quietly revert the shrink-to-floor model.
+    """
+    css = (SRC / "styles.css").read_text(encoding="utf-8")
+
+    wide = _css_slice(css, "@container (min-width: 480px)")
+    # The Playground stage (scoped off the Pipelines graph canvas) shrinks to a
+    # 140px floor instead of holding its 260px default and overflowing the column.
+    assert ".canvas:not(.pbx-pipelines) > .stage { flex: 1 1 140px; min-height: 140px;" in wide, \
+        "the Playground stage must shrink to a 140px floor (flex: 1 1 140px; min-height: 140px)"
+    # The lineage strip is the ONLY last-resort yielder: it shrinks before the
+    # floor is breached. The composer/action-bar/banner never shrink, so the
+    # stage (not the image column) absorbs an open composer.
+    assert ".canvas:not(.pbx-pipelines) > .lineage { flex-shrink: 1; min-height: 0;" in wide, \
+        "the lineage strip must yield (flex-shrink: 1; min-height: 0) before the stage floor"
+    assert "> .composer { flex-shrink: 0;" in wide, \
+        "the composer must not shrink — the stage is the flexible row, not the composer"
+
+    # The <480px container layout is unchanged: a fixed 1:1 aspect-ratio stage
+    # (flex: none), NOT the shrink-to-floor row — the fix must not leak into it.
+    narrow = _css_slice(css, "@container (max-width: 479px)")
+    assert ".stage { flex: none; aspect-ratio: 1 / 1; min-height: 0;" in narrow, \
+        "the <480px stage must stay a 1:1 aspect-ratio box (flex: none)"
+
+    # The base default (used before the container query resolves) is preserved.
+    assert re.search(r"\.stage\s*\{[^}]*min-height:\s*260px", css), \
+        "the base .stage min-height: 260px default must be preserved"
+
+    # And the floor survives minification into the committed bundle (fresh dist).
+    dist_css = "\n".join(p.read_text(encoding="utf-8") for p in (DIST / "assets").glob("*.css"))
+    assert "140px" in dist_css and "canvas:not(.pbx-pipelines)" in dist_css, \
+        "stale dist/: the stage-shrink rule is missing from the built CSS — rebuild view/"

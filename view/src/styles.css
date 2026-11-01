@@ -1147,6 +1147,13 @@ body {
     flex: 1 1 140px;
     min-height: 140px;
   }
+  /* Keep every paint control reachable when the composer squeezes the stage.
+   * Scroll the floating panel locally instead of moving the image column. */
+  .canvas:not(.pbx-pipelines) > .stage .mask-tools {
+    max-height: calc(100% - 20px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
   .canvas:not(.pbx-pipelines) > .banner,
   .canvas:not(.pbx-pipelines) > .unreachable,
   .canvas:not(.pbx-pipelines) > .action-bar,

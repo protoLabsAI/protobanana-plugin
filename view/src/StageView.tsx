@@ -189,6 +189,8 @@ export function StageView({
     const el = vpRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // The paint-tools panel scrolls independently in a short stage.
+      if (e.target instanceof Element && e.target.closest(".mask-tools")) return;
       const b = boxRef.current, n = natRef.current;
       const factor = Math.exp(-e.deltaY * 0.0015);
       if (outpaintRef.current) {

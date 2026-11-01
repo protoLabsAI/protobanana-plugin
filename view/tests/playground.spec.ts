@@ -1266,6 +1266,51 @@ for (const composer of ["Region", "Edit", "Inpaint", "Outpaint"] as const) {
     // The pinned case: the Region composer overflowed the 260px-default stage,
     // so the fix must have shrunk it below that default (not just not-scrolled).
     if (composer === "Region") expect(geometry.stageHeight).toBeLessThan(260);
+    // At 720p the lineage still has room for its complete thumbnail row.
+    const lineage = page.getByRole("listbox", { name: "Image lineage" });
+    const rowBox = (await lineage.boundingBox())!;
+    const thumbBox = (await lineage.getByRole("option").first().boundingBox())!;
+    expect(thumbBox.height).toBeGreaterThan(0);
+    expect(thumbBox.y).toBeGreaterThanOrEqual(rowBox.y);
+    expect(thumbBox.y + thumbBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+  });
+}
+
+for (const height of [720, 600]) {
+  test(`Inpaint controls remain reachable in a short stage at ${height}px`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height });
+    await setup(page);
+    await pickTile(page, 0);
+    await bar(page).getByRole("button", { name: "Inpaint", exact: true }).click();
+    await prompt(page).fill("Change the painted area to blue and preserve all surrounding details. ".repeat(10));
+    const panel = page.locator(".mask-tools");
+    const stage = page.locator(".stage-viewport");
+    const panelBox = (await panel.boundingBox())!;
+    const stageBox = (await stage.boundingBox())!;
+    expect(panelBox.y).toBeGreaterThanOrEqual(stageBox.y);
+    expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(stageBox.y + stageBox.height);
+    // Exercise real wheel scrolling: the viewport's zoom handler must allow it.
+    const zoom = await viewBar(page).textContent();
+    await panel.hover();
+    await page.mouse.wheel(0, 600);
+    if (height === 600) {
+      await expect.poll(() => panel.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    }
+    expect(await viewBar(page).textContent()).toBe(zoom);
+    for (const name of ["Brush size", "Feather"]) {
+      const slider = page.getByLabel(name, { exact: true });
+      await slider.scrollIntoViewIfNeeded();
+      const box = (await slider.boundingBox())!;
+      expect(box.y).toBeGreaterThanOrEqual(panelBox.y);
+      expect(box.y + box.height).toBeLessThanOrEqual(panelBox.y + panelBox.height);
+      const value = await slider.inputValue();
+      await slider.click({ position: { x: box.width * 0.75, y: box.height / 2 } });
+      expect(Number(await slider.inputValue())).toBeGreaterThan(Number(value));
+    }
+    await panel.getByRole("button", { name: "Clear mask", exact: true }).click();
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    expect(await page.locator(".canvas:not(.pbx-pipelines)").evaluate(el =>
+      el.scrollHeight <= el.clientHeight && el.scrollTop === 0)).toBe(true);
   });
 }
 

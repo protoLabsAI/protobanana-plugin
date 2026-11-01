@@ -32,6 +32,8 @@ import {
   ToastProvider,
 } from "./ds-pending";
 
+type AgentRender = Pick<HistoryRecord, "media_id" | "op" | "parent_id" | "alias" | "created"> & { url: string };
+
 const ZERO_MARGINS: Margins = { left: 0, top: 0, right: 0, bottom: 0 };
 
 // Poll GET /jobs/{id} as a FALLBACK for the bus (design R1 / card): short
@@ -287,6 +289,8 @@ export function App() {
   // composer's numeric margins are the WCAG 2.5.7 dragging alternative).
   const [mode, setMode] = useState<EditMode>(null);
   const [mask, setMask] = useState("");
+  const [composerDirty, setComposerDirty] = useState(false);
+  const [agentRenders, setAgentRenders] = useState<AgentRender[]>([]);
   const [margins, setMargins] = useState<Margins>(ZERO_MARGINS);
   // Unfiltered index for ancestry and siblings, independent of Gallery filters.
   const [lineageRecords, setLineageRecords] = useState<HistoryRecord[]>([]);
@@ -423,6 +427,25 @@ export function App() {
     setPrunedSelected(false);
     leaveMode(); // a fresh current image resets to the default edit verb
   }, [leaveMode]);
+
+  const landAgentRender = useCallback((render: AgentRender) => {
+    // Resolve through the media id so authenticated, slug-aware image fetching
+    // is identical to selecting a History thumbnail.
+    landResult(render.media_id, "", 0, { op: render.op, alias: render.alias || undefined,
+      parent_id: render.parent_id, params: {} });
+    setSelected({ ...render, params: {}, source: "agent", job_id: null, starred: false, pruned: false });
+  }, [landResult]);
+
+  useEffect(() => subscribe("protobanana.agent.render", (data) => {
+    setRevision(v => v + 1);
+    const render = data as AgentRender | null;
+    if (!render || typeof render.media_id !== "string" || !render.media_id) return;
+    if (queue.length || composerDirty || mask) {
+      setAgentRenders(renders => [...renders.filter(r => r.media_id !== render.media_id), render]);
+    } else {
+      landAgentRender(render);
+    }
+  }), [queue.length, composerDirty, mask, landAgentRender]);
 
   // History keeps listening on the bus (ADR 0039 / design §7): a late result for
   // a job whose error callout is still showing clears that callout and lands the
@@ -636,6 +659,18 @@ export function App() {
 
   return (
     <ToastProvider>
+    {agentRenders.length > 0 && <div className="pbx-toasts" role="status" aria-live="polite">
+      {agentRenders.map(render => <div className="pbx-toast" style={{ pointerEvents: "auto" }} key={render.media_id}>
+        Agent render added to History
+        <Button variant="ghost" size="sm" onClick={() => {
+          landAgentRender(render);
+          setTab("playground");
+          setAgentRenders(renders => renders.filter(r => r.media_id !== render.media_id));
+        }}>Show</Button>
+        <Button variant="ghost" size="sm" aria-label="Dismiss agent render notification" onClick={() =>
+          setAgentRenders(renders => renders.filter(r => r.media_id !== render.media_id))}>Dismiss</Button>
+      </div>)}
+    </div>}
     <div className={`images${narrow ? " is-narrow" : ""}`} ref={rootRef} onKeyDown={onRootKeyDown}>
       {queue.map(item => (
         <JobTracker key={item.id} item={item} onPhase={handlePhase} onDone={handleDone} onFail={handleFail} />
@@ -771,6 +806,7 @@ export function App() {
           {hasImage && selected && <Lineage records={lineageRecords} selected={selected} pending={busy} onSelect={pickRecord} />}
 
           <Composer
+            onDirtyChange={setComposerDirty}
             catalog={catalog}
             hasImage={hasImage}
             inputRef={editRef}

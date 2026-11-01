@@ -13,12 +13,15 @@ when ``show_model`` is on they ride the multimodal envelope (#1930) instead.
 from __future__ import annotations
 
 import base64
+import logging
 import re
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 from . import client, history, imaging
+
+log = logging.getLogger(__name__)
 
 _registry = None
 CFG: dict = {}
@@ -163,7 +166,14 @@ def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
     # Shared history (design §4): this agent render joins the Studio gallery with
     # source="agent". record_agent never raises — a history write must not break
     # a tool call (tools return readable strings, never raise).
-    history.record_agent(ref.id, meta)
+    record = history.record_agent(ref.id, meta)
+    if record is not None:
+        try:
+            _registry.emit("protobanana.agent.render", {
+                key: record[key] for key in ("media_id", "op", "parent_id", "alias", "created")
+            } | {"url": f"/api/plugins/protobanana/history/{ref.id}/image"})
+        except Exception:  # noqa: BLE001 - notification must never fail a tool
+            log.exception("[protobanana] failed to publish protobanana.agent.render")
     alt = caption or "Generated image"
     text = (
         f"Done — {_dims(raw)} image saved as `{ref.id}`.{(' ' + note) if note else ''}\n\n"

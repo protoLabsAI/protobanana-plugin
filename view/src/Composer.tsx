@@ -124,6 +124,7 @@ export function Composer({
   onMarginsChange,
   records,
   onSubmit,
+  onDirtyChange,
 }: {
   catalog: CatalogEntry[] | null;
   hasImage: boolean;
@@ -138,6 +139,7 @@ export function Composer({
   onMarginsChange: (margins: Margins) => void;
   records: HistoryRecord[];
   onSubmit: (req: JobRequest) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const op = opFor(hasImage, mode);
   const entry = catalog?.find((e) => e.op === op);
@@ -151,6 +153,10 @@ export function Composer({
   const [grounding, setGrounding] = useState("");
   const [references, setReferences] = useState<string[]>(["", ""]);
   const lastSeed = useRef<number | null>(null);
+
+  useEffect(() => {
+    onDirtyChange?.(Boolean(prompt || avoid || seedInput || grounding || references.some(Boolean) || Object.values(margins).some(Boolean)));
+  }, [prompt, avoid, seedInput, grounding, references, margins, onDirtyChange]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 

@@ -71,7 +71,6 @@ for (const busy of ["typed composer", "view job"] as const) {
     await prompt.fill("my unfinished edit");
     if (busy === "view job") {
       await page.getByRole("button", { name: "Generate", exact: true }).click();
-      await prompt.fill("");
     }
     await emit();
     await expect(page.getByAltText("Current image")).toHaveCount(0);
@@ -82,6 +81,51 @@ for (const busy of ["typed composer", "view job"] as const) {
     await expect(page.getByAltText("Current image")).toBeVisible();
     await expect(page.getByRole('listbox', { name: 'History images' }).getByRole('option', { selected: true })).toHaveCount(1);
     await expect(page.getByText("Agent render added to History")).toHaveCount(0);
+  });
+}
+
+async function finishViewJob(page: Page) {
+  await page.evaluate(() => window.postMessage({
+    type: "protoagent:event", topic: "protobanana.job.done",
+    data: { job_id: "view-job", media_id: "studio-image", status: "done", elapsed_s: 1 },
+  }, "*"));
+  await expect(page.getByAltText("Current image")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply edit", exact: true })).toBeVisible();
+}
+
+test("submitted prompt and options allow live agent renders after a view job finishes", async ({ page }) => {
+  const emit = await setup(page);
+  const prompt = page.getByLabel("Prompt", { exact: true });
+  await prompt.fill("my Studio render");
+  await page.getByRole("button", { name: /^Options:/ }).click();
+  await page.getByLabel("Avoid", { exact: true }).fill("watermarks");
+  await page.getByLabel("Seed", { exact: true }).fill("42");
+  await page.getByRole("button", { name: /^Options:/ }).click();
+  const request = page.waitForResponse(response => response.url().endsWith("/jobs") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await request;
+  await finishViewJob(page);
+  await expect(prompt).toHaveValue("my Studio render");
+  await emit();
+  await expect(page.getByRole("listbox", { name: "History images" }).getByRole("option", { selected: true })).toHaveCount(1);
+  await expect(page.getByText("Agent render added to History")).toHaveCount(0);
+});
+
+for (const field of ["Prompt", "Avoid", "Seed"] as const) {
+  test(`new ${field} input during a view job stays protected after completion`, async ({ page }) => {
+    const emit = await setup(page);
+    await page.getByLabel("Prompt", { exact: true }).fill("my Studio render");
+    const request = page.waitForResponse(response => response.url().endsWith("/jobs") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Generate", exact: true }).click();
+    await request;
+    if (field !== "Prompt") await page.getByRole("button", { name: /^Options:/ }).click();
+    const value = field === "Seed" ? "123" : "my next edit";
+    await page.getByLabel(field, { exact: true }).fill(value);
+    await finishViewJob(page);
+    await emit();
+    await expect(page.getByText("Agent render added to History")).toBeVisible();
+    await expect(page.getByLabel(field, { exact: true })).toHaveValue(value);
+    await expect(page.getByRole("listbox", { name: "History images" }).getByRole("option", { selected: true })).toHaveCount(0);
   });
 }
 

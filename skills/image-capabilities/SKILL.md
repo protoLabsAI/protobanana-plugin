@@ -15,6 +15,7 @@ media store and shown inline, and you can see it to check your work.
 |---|---|---|
 | A new image from a description | `generate_image` | ~30s, `draft=true` ~10s |
 | A whole-image change ("make it night", "watercolor", restage a person) | `edit_image` | ~38s, `draft=true` ~10s |
+| A product/person kept **pixel-exact**, placed in a new scene ("keep the mug exactly") | `inpaint_image` with the cut-out as its own mask | ~40s (+~3s to cut out first) |
 | One named thing changed, rest untouched ("make **his shirt** red") | `region_edit` | ~45s |
 | An exact area repainted, given a mask | `inpaint_image` | ~40s |
 | A bigger canvas / different shape | `outpaint_image` | ~40s |
@@ -39,6 +40,27 @@ The first request after the GPU has been idle or switched tasks can take
   control; outpaint the result to change its shape.
 - **Seeds.** Pass the same seed to reproduce a result, or a new seed when an
   edit comes back garbled.
+
+## Stage a product without changing it
+
+When the user wants a product, person or object **placed in a new scene** and
+says to keep it exactly as it is (or it's their product being sold), the subject
+must stay pixel-for-pixel — a redrawn product misrepresents what's for sale, so
+do **not** re-render it.
+
+- If the image is already a transparent cut-out (or run `remove_background`
+  first to make one), use `inpaint_image` with the **cut-out itself as the
+  mask**. Its alpha is exactly the mask you need: transparent (the removed
+  background) = repaint into the new scene, opaque (the subject) = kept
+  untouched. Put the scene in the prompt ("a clean, bright kitchen counter with
+  soft morning light"); the subject's pixels never change.
+- Edges may need a light touch-up — a thin halo or hard seam where the cut-out
+  meets the new background. Follow up with a small `region_edit` or another
+  `inpaint_image` on just the boundary if it shows.
+- Use `edit_image` (a full re-render) **only** when the user accepts changes to
+  the subject — e.g. re-lighting or restyling it to match the scene. It redraws
+  and re-lights the subject, so the result is **not** pixel-for-pixel identical.
+  Say so before using it on someone's product photo.
 
 ## Masks (inpaint)
 

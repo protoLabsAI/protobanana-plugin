@@ -319,6 +319,11 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
     object precisely, prefer region_edit; to place a person from one photo into
     another scene, use compose_images with both images.
 
+    Also the right tool for product and listing photos: "put it on a white
+    background", "remove the background" (onto white) or "put it on a kitchen
+    counter". Pass the ORIGINAL photo and say to keep the subject exactly the
+    same; don't run remove_background first. Use draft=False for a final product shot.
+
     Args:
         image_ref: A media id from a previous result, a /media/ URL, a data: URL, or a file path.
         prompt: The edit instruction.
@@ -386,6 +391,12 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
 async def remove_background(image_ref: str) -> str:
     """Remove an image's background, leaving the subject on transparency
     (sticker/cutout).
+
+    Use ONLY when the user needs real transparency: a sticker, a logo, or a
+    cut-out to composite elsewhere. For a product or object photo on a white
+    background or in a new scene, call edit_image on the ORIGINAL photo instead
+    (don't cut out first). This tool's segmentation gives rough edges on glossy,
+    reflective or fine-edged subjects.
 
     Args:
         image_ref: The image (media id, /media/ URL, data: URL, or path).

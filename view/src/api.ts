@@ -134,6 +134,46 @@ export function apiUrl(path: string): string {
   return `${API_ROOT}/${p}`;
 }
 
+// The host's event-bus relay (protoAgent apps/web/src/lib/pluginEventRelay.ts,
+// `parseSubscribe`): a frame subscribes by posting to its parent
+//   { type: "protoagent:subscribe", patterns: string[] }
+// and the relay DROPS anything that isn't that exact shape. `patterns` REPLACES
+// the frame's whole subscription set on every message, so one topic's subscribe
+// must never be sent alone — it would wipe the others. We therefore keep ALL
+// live topics in one module-level map and re-post the FULL pattern list whenever
+// the set of topics changes. Matching events come back as
+//   { type: "protoagent:event", topic, data, seq }
+// which one shared listener dispatches by exact topic. (The earlier per-call
+// `{ topic }` message was both the wrong shape AND a single topic, so the relay
+// silently dropped every subscribe and no bus event ever reached the view.)
+const _topics = new Map<string, Set<(data: unknown) => void>>();
+let _busListening = false;
+let _highestSeq = -1;
+
+function onBusMessage(ev: MessageEvent): void {
+  const d = ev.data as { type?: string; topic?: string; data?: unknown; seq?: number } | null;
+  if (!d || typeof d !== "object" || d.type !== "protoagent:event" || typeof d.topic !== "string") return;
+  if (typeof d.seq === "number" && d.seq > _highestSeq) _highestSeq = d.seq;
+  const handlers = _topics.get(d.topic);
+  if (handlers) for (const h of [...handlers]) h(d.data);
+}
+
+/** Post the host-contract subscribe frame for the CURRENT topic set (it replaces
+ *  the frame's whole set). `since` asks the relay to replay anything newer than
+ *  the highest seq we've already processed, so a view remount catches up. */
+function postSubscribe(): void {
+  const msg: { type: string; patterns: string[]; since?: number } = {
+    type: "protoagent:subscribe",
+    patterns: [..._topics.keys()],
+  };
+  if (_highestSeq >= 0) msg.since = _highestSeq;
+  try {
+    window.parent?.postMessage(msg, "*");
+  } catch {
+    /* no parent frame in standalone mode */
+  }
+}
+
 /** Subscribe to a core bus topic through the kit's bridge, with a postMessage
  *  fallback (ADR 0039). Returns an unsubscribe fn. */
 export function subscribe(topic: string, handler: (data: unknown) => void): Unsubscribe {
@@ -145,19 +185,28 @@ export function subscribe(topic: string, handler: (data: unknown) => void): Unsu
       /* fall through to the postMessage bridge */
     }
   }
-  const onMessage = (ev: MessageEvent) => {
-    const d = ev.data as { type?: string; topic?: string; data?: unknown } | null;
-    if (d && typeof d === "object" && d.type === "protoagent:event" && d.topic === topic) {
-      handler(d.data);
+  if (!_busListening) {
+    window.addEventListener("message", onBusMessage);
+    _busListening = true;
+  }
+  let handlers = _topics.get(topic);
+  const isNewTopic = !handlers;
+  if (!handlers) {
+    handlers = new Set();
+    _topics.set(topic, handlers);
+  }
+  handlers.add(handler);
+  // Only a change to the SET of topics re-posts; a second handler on an existing
+  // topic reuses the live subscription.
+  if (isNewTopic) postSubscribe();
+  return () => {
+    const set = _topics.get(topic);
+    if (!set || !set.delete(handler)) return;
+    if (set.size === 0) {
+      _topics.delete(topic);
+      postSubscribe();
     }
   };
-  window.addEventListener("message", onMessage);
-  try {
-    window.parent?.postMessage({ type: "protoagent:subscribe", topic }, "*");
-  } catch {
-    /* no parent frame in standalone mode */
-  }
-  return () => window.removeEventListener("message", onMessage);
 }
 
 // ------------------------------------------------------------------ data types

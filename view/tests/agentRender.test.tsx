@@ -104,6 +104,26 @@ test("unsaved mask defers an agent render even with an empty composer", async ({
   await expect(page.getByAltText("Current image")).toBeVisible();
 });
 
+test("an unsaved upload defers an agent render and is not clobbered", async ({ page }) => {
+  const emit = await setup(page);
+  // A dropped/pasted/uploaded image lives only in the browser (a data: URL) with
+  // NO History record, so an incoming agent render must not silently replace it.
+  await page.setInputFiles('input[type="file"]', {
+    name: "upload.png", mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+      "base64"),
+  });
+  const current = page.getByAltText("Current image");
+  await expect(current).toHaveAttribute("src", /^data:/); // the upload is current
+  await emit();
+  await expect(page.getByText("Agent render added to History")).toBeVisible();
+  await expect(current).toHaveAttribute("src", /^data:/); // still the upload, not the render
+  await page.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(page.getByAltText("Current image")).not.toHaveAttribute("src", /^data:/);
+  await expect(page.getByText("Agent render added to History")).toHaveCount(0);
+});
+
 test("typed outpaint margins also protect the composer", async ({ page }) => {
   const emit = await setup(page);
   await emit();

@@ -436,16 +436,24 @@ export function App() {
     setSelected({ ...render, params: {}, source: "agent", job_id: null, starred: false, pruned: false });
   }, [landResult]);
 
+  // Land an incoming agent render as the current image ONLY when the operator
+  // has no unsaved work in the view that landing would destroy or interrupt.
+  // That is the full set of "busy" signals: a view-submitted job in flight
+  // (queue), typed composer input (composerDirty — which also covers outpaint
+  // margins), an unsaved mask, or an uploaded/dropped/pasted image (upload).
+  // An upload lives only in the browser with NO History record, so landing —
+  // which calls setUpload(undefined) — would lose it with no way to recover it;
+  // treat it like the other unsaved work and defer to the "Show" toast instead.
   useEffect(() => subscribe("protobanana.agent.render", (data) => {
     setRevision(v => v + 1);
     const render = data as AgentRender | null;
     if (!render || typeof render.media_id !== "string" || !render.media_id) return;
-    if (queue.length || composerDirty || mask) {
+    if (queue.length || composerDirty || mask || upload) {
       setAgentRenders(renders => [...renders.filter(r => r.media_id !== render.media_id), render]);
     } else {
       landAgentRender(render);
     }
-  }), [queue.length, composerDirty, mask, landAgentRender]);
+  }), [queue.length, composerDirty, mask, upload, landAgentRender]);
 
   // History keeps listening on the bus (ADR 0039 / design §7): a late result for
   // a job whose error callout is still showing clears that callout and lands the

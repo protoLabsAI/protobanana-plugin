@@ -3,8 +3,10 @@
 The skill is prose that steers the agent's tool choice, so a regression here is
 a wrong tool picked at runtime — not a crash a loaded-plugin test would catch.
 Product staging should edit the original photo with Qwen, including white
-background requests. BiRefNet cut-outs are reserved for true transparency;
-inpainting around them retains rough edges on glossy subjects.
+background requests — while still telling the user that edit_image re-renders,
+so the result isn't pixel-for-pixel identical. BiRefNet cut-outs are reserved
+for true transparency; inpainting around them retains rough edges on glossy
+subjects.
 
 Pure filesystem reads + regex (no PyYAML/jsonschema — not dev deps; the repo's
 other doc-adjacent tests parse text the same way): no plugin load, no host.
@@ -29,13 +31,13 @@ def _frontmatter(text: str) -> str:
 
 
 def _recipe_section(text: str) -> str:
-    """The body of the 'Stage a product without changing it' section (up to the
-    next ``## `` heading)."""
+    """The body of the 'Stage a product photo' section (up to the next ``## ``
+    heading)."""
     m = re.search(
-        r"(?ms)^##\s+Stage a product without changing it\s*$(.*?)(?=^##\s|\Z)",
+        r"(?ms)^##\s+Stage a product photo\s*$(.*?)(?=^##\s|\Z)",
         text,
     )
-    assert m, "SKILL.md has no 'Stage a product without changing it' recipe"
+    assert m, "SKILL.md has no 'Stage a product photo' recipe"
     return m.group(1)
 
 
@@ -58,6 +60,19 @@ def test_recipe_routes_product_staging_to_edit_on_original():
     assert "pure white seamless" in recipe and "soft natural shadow" in recipe
 
 
+def test_recipe_warns_edit_image_is_a_re_render():
+    """edit_image re-renders, so the user must be told it isn't the exact pixels.
+
+    Guards the honesty caveat the earlier rewrite dropped: a seller's listing
+    shouldn't be altered silently just because the subject usually holds.
+    """
+    recipe = " ".join(_recipe_section(_skill_text()).split()).lower().replace("**", "")
+    assert "full re-render" in recipe
+    assert "redraws and re-lights the subject" in recipe
+    assert "not pixel-for-pixel identical" in recipe
+    assert "tell the user" in recipe
+
+
 def test_recipe_reserves_background_removal_for_true_transparency():
     """Transparency still uses BiRefNet, with an explicit edge-quality caveat."""
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
@@ -70,16 +85,21 @@ def test_recipe_reserves_background_removal_for_true_transparency():
 
 
 def test_recipe_rejects_cutout_then_inpaint_staging():
-    """Do not restore the old cut-out/mask route or its restriction on Qwen."""
-    text = " ".join(_skill_text().split()).lower()
+    """Do not restore the old cut-out/mask staging route.
+
+    The honesty words it once used ("pixel-for-pixel", "only when the user
+    accepts changes") are deliberately NOT forbidden here — the re-render caveat
+    needs them (see ``test_recipe_warns_edit_image_is_a_re_render``). Only the
+    cut-out-as-mask plumbing is gone.
+    """
+    text = " ".join(_skill_text().split()).lower().replace("**", "")
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
     assert "do not chain `remove_background` → `inpaint_image` to stage a product" in recipe
     for old_advice in (
         "cut-out as its own mask", "cut-out itself as the mask",
-        "run `remove_background` first", "pixel-for-pixel", "pixel-exact",
-        "only when the user accepts changes", "edges may need a light touch-up",
+        "run `remove_background` first", "edges may need a light touch-up",
     ):
-        assert old_advice not in text.replace("**", "")
+        assert old_advice not in text
     # Inpaint belongs only in the prohibition, not in staging steps.
     assert recipe.count("`inpaint_image`") == 1
 

@@ -41,7 +41,7 @@ The first request after the GPU has been idle or switched tasks can take
 - **Seeds.** Pass the same seed to reproduce a result, or a new seed when an
   edit comes back garbled.
 
-## Stage a product without changing it
+## Stage a product photo
 
 For a product or object photo → shop or listing photo, or a new scene, use
 `edit_image` (Qwen-Image-Edit) on the **original photo**. Describe the new
@@ -52,6 +52,12 @@ in soft morning window light. Keep the mug exactly the same."
 This includes "white background" or "remove the background" requests for product
 photos: "Remove everything except the mug and place it on a pure white seamless
 studio background with a soft natural shadow. Keep the mug exactly the same."
+
+`edit_image` is a full re-render: it redraws and re-lights the subject, so the
+result is **not** pixel-for-pixel identical to the original. Tell the user that
+before staging someone's product photo — it's their listing. In practice Qwen
+holds the subject (the glaze, the speckles, a handle, fine edges) cleanly, far
+better than a cut-out does; it just isn't the exact original pixels.
 
 Use `remove_background` only for **true transparency**: a sticker, a logo, or a
 cut-out to composite elsewhere. Warn that BiRefNet segmentation can give glossy,

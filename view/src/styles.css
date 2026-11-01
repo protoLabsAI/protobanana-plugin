@@ -315,6 +315,59 @@ body {
   justify-self: start;
 }
 
+/* Compact render strip (bd-i6yr): when the stage is short (an open edit composer
+ * has shrunk it below ~260px, bd-lltr/#45) the centred card covers almost the
+ * whole image, so the render status becomes a thin bar pinned to the stage's
+ * bottom edge. The dimmed image stays fit and visible above it. One row holds the
+ * spinner, the same honest text (its title carries the cold-load note) and an
+ * inline ghost Stop on the right; a 3px Progress runs flush along the bottom. The
+ * whole strip stays at ~40px so >=75% of the short stage still shows the image. */
+.render-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: grid;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px var(--overlay);
+}
+
+.render-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* The text takes the slack so the inline Stop sits hard against the right edge;
+ * it truncates rather than wrapping the strip to a second row. */
+.render-strip-row .render-overlay-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A quiet, compact Stop — still a usable target, but tight enough to keep the
+ * strip thin (same Stop semantics/copy as the card). */
+.render-strip-row .render-overlay-stop {
+  flex: none;
+  justify-self: auto;
+  padding: 2px 9px;
+}
+
+/* The same determinate→indeterminate Progress, thinned to a 3px edge bar that
+ * sits flush along the strip's bottom (no radius, transparent track). */
+.render-strip .pbx-progress {
+  height: 3px;
+  border-radius: 0;
+  background: transparent;
+}
+
 /* ---- composer ----------------------------------------------------------- */
 
 .composer {

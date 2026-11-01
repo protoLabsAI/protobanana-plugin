@@ -233,33 +233,58 @@ function JobTracker({ item, onPhase, onDone, onFail }: {
   return null;
 }
 
+const COLD_LOAD_TEXT = "Model is loading — first render after a swap can take longer";
+
 /** The render overlay that sits over the (dimmed) previous image while a job is
  *  in flight (design §7): spinner, honest elapsed/typical, a Progress against
  *  the catalog's typical latency that turns indeterminate past it, a cold-load
- *  line after 1.5× typical, and a ghost Stop. role="status" lives on the shell. */
-function RenderOverlay({ item, entry, onStop }: { item: QueueItem; entry?: CatalogEntry; onStop: () => void }) {
+ *  line after 1.5× typical, and a ghost Stop. role="status" lives on the shell.
+ *
+ *  When the stage is short (an open edit composer has shrunk it below ~260px,
+ *  bd-lltr/#45) the card would cover almost the whole image, so `compact` swaps
+ *  it for a thin strip pinned to the stage's bottom edge (bd-i6yr): one row with
+ *  the SAME honest text (the cold-load note folds into its title/tooltip) and an
+ *  inline ghost Stop, with the same determinate→indeterminate Progress as a 3px
+ *  bar along the strip's bottom. The job/Stop logic and copy are unchanged. */
+function RenderOverlay({ item, entry, onStop, compact }: { item: QueueItem; entry?: CatalogEntry; onStop: () => void; compact?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 500); return () => window.clearInterval(t); }, []);
   const elapsed = Math.max(0, Math.floor((now - item.startedAt) / 1000));
   const typical = entry?.typical_latency_s ?? 25;
   const cold = elapsed > typical * 1.5;
+  const progress = <Progress ariaLabel="Render progress" indeterminate={elapsed > typical} value={(elapsed / typical) * 100} />;
+  const stop = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="render-overlay-stop"
+      title="Stops tracking; the GPU still finishes. The result will appear in History."
+      onClick={onStop}
+    >
+      Stop
+    </Button>
+  );
+  if (compact) {
+    return (
+      <div className="render-strip" role="status">
+        <div className="render-strip-row">
+          <Spinner size={14} />
+          <span className="render-overlay-text" title={cold ? COLD_LOAD_TEXT : undefined}>Rendering · {elapsed}s · usually ~{typical}s</span>
+          {stop}
+        </div>
+        {progress}
+      </div>
+    );
+  }
   return (
     <div className="render-overlay">
       <div className="render-overlay-row">
         <Spinner size={18} />
         <span className="render-overlay-text">Rendering · {elapsed}s · usually ~{typical}s</span>
       </div>
-      <Progress ariaLabel="Render progress" indeterminate={elapsed > typical} value={(elapsed / typical) * 100} />
-      {cold && <span className="render-overlay-cold">Model is loading — first render after a swap can take longer</span>}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="render-overlay-stop"
-        title="Stops tracking; the GPU still finishes. The result will appear in History."
-        onClick={onStop}
-      >
-        Stop
-      </Button>
+      {progress}
+      {cold && <span className="render-overlay-cold">{COLD_LOAD_TEXT}</span>}
+      {stop}
     </div>
   );
 }
@@ -774,16 +799,29 @@ export function App() {
             setMargin={setMargin}
             onMask={setMask}
             onUpload={() => fileInput.current?.click()}
-            overlay={
-              (activeRendering || calloutNodes.length > 0) && (
-                <div className="overlay" role="status">
-                  {activeRendering && active && (
-                    <RenderOverlay item={active} entry={catalog?.find(e => e.op === active.request.op)} onStop={() => stop(active.id)} />
+            overlay={(shortStage) => {
+              if (!activeRendering && calloutNodes.length === 0) return null;
+              const entry = active ? catalog?.find(e => e.op === active.request.op) : undefined;
+              const showCard = activeRendering && !shortStage;
+              return (
+                <>
+                  {/* Short stage (open edit composer): the render status is a thin
+                      bottom strip pinned to the stage, not the centred card that
+                      would cover the image (bd-i6yr). Callouts stay cards. */}
+                  {activeRendering && shortStage && active && (
+                    <RenderOverlay compact item={active} entry={entry} onStop={() => stop(active.id)} />
                   )}
-                  {calloutNodes}
-                </div>
-              )
-            }
+                  {(showCard || calloutNodes.length > 0) && (
+                    <div className="overlay" role="status">
+                      {showCard && active && (
+                        <RenderOverlay item={active} entry={entry} onStop={() => stop(active.id)} />
+                      )}
+                      {calloutNodes}
+                    </div>
+                  )}
+                </>
+              );
+            }}
           />
 
           <input

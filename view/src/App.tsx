@@ -11,6 +11,7 @@ import {
   type HistoryRecord,
   ready,
   submitJob,
+  saveUpload,
   subscribe,
 } from "./api";
 import { ActionBar, type EditMode } from "./ActionBar";
@@ -305,6 +306,9 @@ export function App() {
   const [selected, setSelected] = useState<HistoryRecord>();
   const [result, setResult] = useState<{ mediaId: string | null; url: string; elapsed: number }>();
   const [upload, setUpload] = useState<string>();
+  const uploadSelection = useRef(0);
+  const uploadRecords = useRef(new Map<string, Promise<HistoryRecord>>());
+  const [uploadError, setUploadError] = useState("");
   const [prunedSelected, setPrunedSelected] = useState(false);
 
   // The active edit verb on the current image (design §4.3). `null` is the
@@ -448,6 +452,7 @@ export function App() {
     if (mediaId) setSelected({ media_id: mediaId, parent_id: req?.parent_id || null, op: req?.op || "generate",
       alias: req?.alias || null, params: req?.params || {}, source: "studio", job_id: null,
       created: Date.now() / 1000, starred: false, pruned: false });
+    uploadSelection.current++;
     setUpload(undefined);
     setPrunedSelected(false);
     leaveMode(); // a fresh current image resets to the default edit verb
@@ -466,9 +471,7 @@ export function App() {
   // That is the full set of "busy" signals: a view-submitted job in flight
   // (queue), typed composer input (composerDirty — which also covers outpaint
   // margins), an unsaved mask, or an uploaded/dropped/pasted image (upload).
-  // An upload lives only in the browser with NO History record, so landing —
-  // which calls setUpload(undefined) — would lose it with no way to recover it;
-  // treat it like the other unsaved work and defer to the "Show" toast instead.
+  // Keep an actively loaded upload on stage, including when persistence fails.
   useEffect(() => subscribe("protobanana.agent.render", (data) => {
     setRevision(v => v + 1);
     const render = data as AgentRender | null;
@@ -502,6 +505,7 @@ export function App() {
       if (!alive) return;
       const rec = all.find(r => r.media_id === focus.id);
       setResult(undefined);
+      uploadSelection.current++;
       setUpload(undefined);
       setPrunedSelected(Boolean(rec?.pruned));
       setSelected(rec);
@@ -518,10 +522,10 @@ export function App() {
   const displaySource = prunedSelected ? undefined : (upload || result?.url || selected?.media_id || undefined);
   const current = useImage(displaySource);
   const currentMediaId = result?.mediaId || selected?.media_id || null;
-  const editRef = upload || currentMediaId;
+  const editRef = currentMediaId || upload || null;
   const hasImage = Boolean(editRef) && !prunedSelected;
   // The record backing the current image (for Vary params, Star, Send to agent).
-  // Uploads have no record; a pruned selection isn't editable.
+  // Saved uploads have a record too; a pruned selection is not editable.
   const currentRecord = prunedSelected ? undefined : selected;
 
   const parentRecord = lineageRecords.find(rec => rec.media_id === currentRecord?.parent_id);
@@ -568,6 +572,7 @@ export function App() {
   const startNew = () => {
     setSelected(undefined);
     setResult(undefined);
+    uploadSelection.current++;
     setUpload(undefined);
     setPrunedSelected(false);
     setFocusError("");
@@ -578,6 +583,7 @@ export function App() {
   const pickRecord = (rec: HistoryRecord) => {
     setTab("playground");
     setResult(undefined);
+    uploadSelection.current++;
     setUpload(undefined);
     setPrunedSelected(rec.pruned);
     setSelected(rec);
@@ -592,6 +598,7 @@ export function App() {
   const openInPlayground = useCallback((mediaId: string) => {
     setTab("playground");
     setResult(undefined);
+    uploadSelection.current++;
     setUpload(undefined);
     setPrunedSelected(false);
     setFocusError("");
@@ -616,14 +623,39 @@ export function App() {
   // Load an uploaded / dropped / pasted image as the current input (§4.1).
   const loadFile = useCallback((file?: File | null) => {
     if (!file || !file.type.startsWith("image/")) return;
+    const token = ++uploadSelection.current;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
+      if (token !== uploadSelection.current) return;
       setSelected(undefined);
       setResult(undefined);
       setPrunedSelected(false);
       setFocusError("");
+      setUploadError("");
       leaveMode();
-      setUpload(String(reader.result));
+      const data = String(reader.result);
+      setUpload(data);
+      if (file.size > 20 * 1024 * 1024) {
+        setUploadError("Image exceeds the 20 MiB History limit. You can still edit this image.");
+        return;
+      }
+      // Hash the content, not just name/size: two different photos can share both.
+      // Cache promises as well as completed records to coalesce rapid reselections.
+      try {
+        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        const key = JSON.stringify([file.name, file.type, Array.from(new Uint8Array(digest))]);
+        let pending = uploadRecords.current.get(key);
+        if (!pending) {
+          pending = saveUpload(file);
+          uploadRecords.current.set(key, pending);
+          pending.catch(() => uploadRecords.current.delete(key));
+        }
+        const rec = await pending;
+        setRevision(v => v + 1);
+        if (token === uploadSelection.current) setSelected(rec);
+      } catch {
+        if (token === uploadSelection.current) setUploadError("Could not save upload to History. You can still edit this image.");
+      }
     };
     reader.readAsDataURL(file);
   }, [leaveMode]);
@@ -692,6 +724,11 @@ export function App() {
 
   return (
     <ToastProvider>
+    {uploadError && <div className="pbx-toasts" role="status" aria-live="polite">
+      <div className="pbx-toast">{uploadError}
+        <Button variant="ghost" size="sm" onClick={() => setUploadError("")}>Dismiss</Button>
+      </div>
+    </div>}
     {agentRenders.length > 0 && <div className="pbx-toasts" role="status" aria-live="polite">
       {agentRenders.map(render => <div className="pbx-toast" style={{ pointerEvents: "auto" }} key={render.media_id}>
         Agent render added to History

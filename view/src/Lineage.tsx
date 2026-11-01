@@ -3,6 +3,8 @@ import { Button, Popover, Spinner } from "./ds-pending";
 import { ImageThumb, ScrollArea, ThumbnailStrip } from "./ds-pending/ImageThumb";
 
 export function branchRequest(rec: HistoryRecord): JobRequest {
+  if (rec.op === "upload") return { op: "edit", parent_id: rec.media_id,
+    params: { image: rec.media_id, prompt: "Create a variation of this image", seed: Math.floor(Math.random() * 2 ** 31) } };
   return { op: rec.op, alias: rec.alias, parent_id: rec.parent_id,
     params: { ...rec.params, seed: (Number(rec.params.seed || 0) + 1 + Math.floor(Math.random() * (2 ** 30))) % (2 ** 31) } };
 }

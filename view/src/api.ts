@@ -339,6 +339,20 @@ export interface HistoryRecord {
   pruned: boolean;
 }
 
+/** Persist once per selected file; the caller caches the in-flight request. */
+export async function saveUpload(file: File): Promise<HistoryRecord> {
+  const r = await apiFetch(`uploads?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "content-type": file.type }, body: file,
+  });
+  if (!r.ok) throw new Error(`upload ${r.status}`);
+  const rec = await r.json() as HistoryRecord;
+  if (!rec || typeof rec.media_id !== "string" || !rec.media_id || rec.op !== "upload"
+      || rec.source !== "upload" || rec.parent_id !== null || !rec.params) {
+    throw new Error("Invalid upload record");
+  }
+  return rec;
+}
+
 export interface HistoryPage {
   records: HistoryRecord[];
   next_cursor: number | null;

@@ -2,7 +2,8 @@
 
 One index serves BOTH surfaces (design §3.1, §4): the agent tools write a
 record with ``source="agent"`` (``tools._finish``) and Studio jobs write one
-with ``source="studio"`` when they complete (``jobs._run``). Records only point
+with ``source="studio"`` when they complete (``jobs._run``). Uploads are roots
+with ``source="upload"`` and their original filename. Records only point
 at media ids — the bytes stay in the core media store — so there is no need for
 a core media-list API (design §3.1). Each record is::
 
@@ -235,19 +236,22 @@ def image_bytes(media_id: str) -> bytes | None:
 
 # ------------------------------------------------------------------- writes
 
-def append(record: dict) -> None:
+def append(record: dict) -> bool:
     """Append one record to the JSONL log. Best-effort: logs and returns on any
-    failure so a history write can never break a tool call or a job."""
+    failure so a history write can never break a tool call or a job.
+    Returns whether the record was written."""
     path = _history_file()
     if path is None:
         log.debug("[protobanana] history dir not configured — dropping record")
-        return
+        return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
+        return True
     except Exception:  # noqa: BLE001 - never raises into the caller
         log.exception("[protobanana] failed to append a history record")
+        return False
 
 
 def _media_id_of(ref) -> str | None:
@@ -310,6 +314,16 @@ def record_agent(media_id: str, meta: dict | None) -> dict | None:
         return record
     except Exception:  # noqa: BLE001 - a tool must never raise on history
         log.exception("[protobanana] record_agent failed")
+
+
+def record_upload(media_id: str, filename: str) -> dict | None:
+    """Persist an upload root, reporting index failure to the upload route."""
+    record = {
+        "media_id": media_id, "parent_id": None, "op": "upload", "alias": None,
+        "params": {"filename": filename}, "source": "upload", "job_id": None,
+        "created": time.time(), "starred": False,
+    }
+    return {**record, "pruned": False} if append(record) else None
 
 
 def record_studio(state: dict, media_id: str) -> None:

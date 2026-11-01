@@ -39,6 +39,13 @@ function cls(...parts: (string | false | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
 }
 
+// Below this CSS height the stage viewport is too short for the centred render
+// card (which would cover almost the whole shrunk stage); the render overlay
+// drops to a compact bottom strip instead (bd-i6yr). Measured off the same
+// ResizeObserver box the stage already keeps for fit, so it tracks the live
+// shrink an open edit composer causes (bd-lltr/#45).
+const SHORT_STAGE_PX = 260;
+
 // The hand-built floating view toolbar (design §7). Token-only styles, raised bg,
 // every control named (aria-label + Tooltip). It shows ONLY with an image.
 function ViewToolbar({ pct, onOut, onIn, onHundred, onFit, onFull, extra }: {
@@ -113,7 +120,10 @@ export function StageView({
   setMargin: (k: string, v: unknown) => void;
   onMask: (mask: string) => void;
   onUpload: () => void;
-  overlay: ReactNode;
+  // Given the current stage shortness, render the render/error overlay. The stage
+  // owns the measurement (see SHORT_STAGE_PX) so the overlay can switch to the
+  // compact bottom strip when a shrunk stage would otherwise be covered (bd-i6yr).
+  overlay: (shortStage: boolean) => ReactNode;
 }) {
   const [comparing, setComparing] = useState(false);
   const toast = useToast();
@@ -182,6 +192,10 @@ export function StageView({
   }, [hasImage, loading]);
 
   const geom = nat && box && nat.iw && nat.ih ? geomOf(box.W, box.H, nat.iw, nat.ih, view) : null;
+
+  // Short stage → compact render strip (bd-i6yr). `box` is the viewport content
+  // box; absent (no image yet) it's a tall empty stage, so default to the card.
+  const shortStage = Boolean(box && box.H < SHORT_STAGE_PX);
 
   // Wheel / trackpad pinch zoom around the cursor. A native non-passive listener
   // (React's onWheel is passive) so preventDefault stops the page from scrolling.
@@ -378,7 +392,7 @@ export function StageView({
         />
       ) : null}
 
-      {overlay}
+      {overlay(shortStage)}
 
       <WorkflowDrawer
         open={inspectOpen}

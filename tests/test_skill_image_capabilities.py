@@ -2,11 +2,11 @@
 
 The skill is prose that steers the agent's tool choice, so a regression here is
 a wrong tool picked at runtime — not a crash a loaded-plugin test would catch.
-The one behaviour this pins: when a seller wants their product kept exactly and
-placed in a new scene, the skill must route to ``inpaint_image`` with the
-cut-out as its own mask (pixel-exact subject), not ``edit_image`` (a re-render
-that redraws the product). Seen twice on the demo profile picking different
-tools for the same request.
+Product staging should edit the original photo with Qwen, including white
+background requests — while still telling the user that edit_image re-renders,
+so the result isn't pixel-for-pixel identical. BiRefNet cut-outs are reserved
+for true transparency; inpainting around them retains rough edges on glossy
+subjects.
 
 Pure filesystem reads + regex (no PyYAML/jsonschema — not dev deps; the repo's
 other doc-adjacent tests parse text the same way): no plugin load, no host.
@@ -31,13 +31,13 @@ def _frontmatter(text: str) -> str:
 
 
 def _recipe_section(text: str) -> str:
-    """The body of the 'Stage a product without changing it' section (up to the
-    next ``## `` heading)."""
+    """The body of the 'Stage a product photo' section (up to the next ``## ``
+    heading)."""
     m = re.search(
-        r"(?ms)^##\s+Stage a product without changing it\s*$(.*?)(?=^##\s|\Z)",
+        r"(?ms)^##\s+Stage a product photo\s*$(.*?)(?=^##\s|\Z)",
         text,
     )
-    assert m, "SKILL.md has no 'Stage a product without changing it' recipe"
+    assert m, "SKILL.md has no 'Stage a product photo' recipe"
     return m.group(1)
 
 
@@ -49,44 +49,70 @@ def test_frontmatter_names_the_skill():
     assert re.search(r"(?m)^description:\s*\S", fm), "frontmatter needs a description"
 
 
-def test_recipe_routes_pixel_exact_staging_to_inpaint_with_cutout_mask():
-    """r1: the recipe names inpaint_image with the cut-out as the mask, explains
-    the transparent/opaque convention, and points at remove_background to make
-    the cut-out when there isn't one."""
-    recipe = _recipe_section(_skill_text())
-    assert "inpaint_image" in recipe
-    assert re.search(r"cut-?out", recipe), "recipe must mention the cut-out"
-    assert "mask" in recipe, "recipe must say the cut-out is used as the mask"
-    assert "remove_background" in recipe, "recipe must offer to cut out first"
-    # The mask convention that makes this pixel-exact: transparent repaints the
-    # background, opaque keeps the subject.
-    assert "transparent" in recipe and "opaque" in recipe
-    assert re.search(r"pixel[- ]for[- ]pixel", recipe)
+def test_recipe_routes_product_staging_to_edit_on_original():
+    """Product/listing and new-scene requests use the original, preserving identity."""
+    recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
+    assert "`edit_image` (qwen-image-edit) on the **original photo**" in recipe
+    for intent in ("product", "object", "shop", "listing", "new scene"):
+        assert intent in recipe
+    assert "keep the subject exactly the same" in recipe
+    assert "white background" in recipe and "remove the background" in recipe
+    assert "pure white seamless" in recipe and "soft natural shadow" in recipe
 
 
-def test_recipe_scopes_edit_image_to_accepted_subject_changes():
-    """The recipe must say edit_image is a re-render — acceptable ONLY when the
-    user accepts changes to the subject — so the agent doesn't reach for it when
-    the product must be preserved."""
-    recipe = _recipe_section(_skill_text())
-    assert "edit_image" in recipe
-    assert re.search(r"(?i)\bonly\b", recipe), "edit_image must be scoped with 'only'"
-    # It is flagged as not identical / a redraw, not an equal alternative.
-    assert re.search(r"(?i)re-?(render|draw|light)", recipe)
+def test_recipe_warns_edit_image_is_a_re_render():
+    """edit_image re-renders, so the user must be told it isn't the exact pixels.
+
+    Guards the honesty caveat the earlier rewrite dropped: a seller's listing
+    shouldn't be altered silently just because the subject usually holds.
+    """
+    recipe = " ".join(_recipe_section(_skill_text()).split()).lower().replace("**", "")
+    assert "full re-render" in recipe
+    assert "redraws and re-lights the subject" in recipe
+    assert "not pixel-for-pixel identical" in recipe
+    assert "tell the user" in recipe
 
 
-def test_recipe_notes_edge_touch_up():
-    """A light edge touch-up is called out so the agent follows up on seams."""
-    recipe = _recipe_section(_skill_text())
-    assert re.search(r"(?i)edge", recipe)
-    assert re.search(r"(?i)touch-?up|halo|seam", recipe)
+def test_recipe_reserves_background_removal_for_true_transparency():
+    """Transparency still uses BiRefNet, with an explicit edge-quality caveat."""
+    recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
+    assert "use `remove_background` only for **true transparency**" in recipe
+    for use in ("sticker", "logo", "composite elsewhere"):
+        assert use in recipe
+    for caveat in ("warn", "birefnet", "glossy", "reflective", "fine-edged",
+                   "glass", "ceramics", "hair", "fur", "rough edges"):
+        assert caveat in recipe
 
 
-def test_operation_table_has_a_pixel_exact_staging_row():
-    """The quick-reference table carries the recipe too: a row that keeps the
-    subject pixel-exact in a new scene and routes to inpaint_image."""
-    text = _skill_text()
-    rows = [ln for ln in text.splitlines() if ln.lstrip().startswith("|")]
-    staging = [r for r in rows if "inpaint_image" in r and re.search(r"(?i)pixel-?exact", r)]
-    assert staging, "operation table needs a pixel-exact staging row routing to inpaint_image"
-    assert re.search(r"(?i)cut-?out", staging[0]), "the staging row names the cut-out as the mask"
+def test_recipe_rejects_cutout_then_inpaint_staging():
+    """Do not restore the old cut-out/mask staging route.
+
+    The honesty words it once used ("pixel-for-pixel", "only when the user
+    accepts changes") are deliberately NOT forbidden here — the re-render caveat
+    needs them (see ``test_recipe_warns_edit_image_is_a_re_render``). Only the
+    cut-out-as-mask plumbing is gone.
+    """
+    text = " ".join(_skill_text().split()).lower().replace("**", "")
+    recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
+    assert "do not chain `remove_background` → `inpaint_image` to stage a product" in recipe
+    for old_advice in (
+        "cut-out as its own mask", "cut-out itself as the mask",
+        "run `remove_background` first", "edges may need a light touch-up",
+    ):
+        assert old_advice not in text
+    # Inpaint belongs only in the prohibition, not in staging steps.
+    assert recipe.count("`inpaint_image`") == 1
+
+
+def test_operation_table_routes_staging_and_transparency():
+    """The quick reference agrees with the recipe's routing and edge caveat."""
+    rows = [ln.lower() for ln in _skill_text().splitlines() if ln.startswith("|")]
+    staging = next(r for r in rows if "product/object" in r)
+    assert "`edit_image`" in staging and "original photo" in staging
+    assert "keep the subject exactly the same" in staging
+    assert "on white" in staging and "new scene" in staging
+    assert "inpaint_image" not in staging
+    transparency = next(r for r in rows if "`remove_background`" in r)
+    for term in ("true transparency only", "sticker", "logo", "composite elsewhere",
+                 "glossy", "reflective", "fine-edged", "rough edges", "birefnet"):
+        assert term in transparency

@@ -15,11 +15,11 @@ media store and shown inline, and you can see it to check your work.
 |---|---|---|
 | A new image from a description | `generate_image` | ~30s, `draft=true` ~10s |
 | A whole-image change ("make it night", "watercolor", restage a person) | `edit_image` | ~38s, `draft=true` ~10s |
-| A product/person kept **pixel-exact**, placed in a new scene ("keep the mug exactly") | `inpaint_image` with the cut-out as its own mask | ~40s (+~3s to cut out first) |
+| A product/object photo for a shop or listing, on white or in a new scene | `edit_image` on the original photo; keep the subject exactly the same | ~40s |
 | One named thing changed, rest untouched ("make **his shirt** red") | `region_edit` | ~45s |
 | An exact area repainted, given a mask | `inpaint_image` | ~40s |
 | A bigger canvas / different shape | `outpaint_image` | ~40s |
-| A sticker / cutout on transparency | `remove_background` | ~3s |
+| True transparency only: a sticker, logo or cut-out to composite elsewhere (glossy, reflective or fine-edged subjects can get rough edges) | `remove_background` (BiRefNet) | ~3s |
 | Several images combined into one (2–10 refs) | `compose_images` | ~45s |
 
 The first request after the GPU has been idle or switched tasks can take
@@ -43,24 +43,21 @@ The first request after the GPU has been idle or switched tasks can take
 
 ## Stage a product without changing it
 
-When the user wants a product, person or object **placed in a new scene** and
-says to keep it exactly as it is (or it's their product being sold), the subject
-must stay pixel-for-pixel — a redrawn product misrepresents what's for sale, so
-do **not** re-render it.
+For a product or object photo → shop or listing photo, or a new scene, use
+`edit_image` (Qwen-Image-Edit) on the **original photo**. Describe the new
+background and say to **keep the subject exactly the same**. For example:
+"Replace the messy desk background with a bright white marble kitchen counter
+in soft morning window light. Keep the mug exactly the same."
 
-- If the image is already a transparent cut-out (or run `remove_background`
-  first to make one), use `inpaint_image` with the **cut-out itself as the
-  mask**. Its alpha is exactly the mask you need: transparent (the removed
-  background) = repaint into the new scene, opaque (the subject) = kept
-  untouched. Put the scene in the prompt ("a clean, bright kitchen counter with
-  soft morning light"); the subject's pixels never change.
-- Edges may need a light touch-up — a thin halo or hard seam where the cut-out
-  meets the new background. Follow up with a small `region_edit` or another
-  `inpaint_image` on just the boundary if it shows.
-- Use `edit_image` (a full re-render) **only** when the user accepts changes to
-  the subject — e.g. re-lighting or restyling it to match the scene. It redraws
-  and re-lights the subject, so the result is **not** pixel-for-pixel identical.
-  Say so before using it on someone's product photo.
+This includes "white background" or "remove the background" requests for product
+photos: "Remove everything except the mug and place it on a pure white seamless
+studio background with a soft natural shadow. Keep the mug exactly the same."
+
+Use `remove_background` only for **true transparency**: a sticker, a logo, or a
+cut-out to composite elsewhere. Warn that BiRefNet segmentation can give glossy,
+reflective or fine-edged subjects (glass, ceramics, hair, fur) rough edges.
+Do not chain `remove_background` → `inpaint_image` to stage a product: inpainting
+around a cut-out retains its rough edges.
 
 ## Masks (inpaint)
 

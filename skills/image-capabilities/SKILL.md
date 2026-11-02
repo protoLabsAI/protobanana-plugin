@@ -53,11 +53,15 @@ This includes "white background" or "remove the background" requests for product
 photos: "Remove everything except the mug and place it on a pure white seamless
 studio background with a soft natural shadow. Keep the mug exactly the same."
 
-`edit_image` is a full re-render: it redraws and re-lights the subject, so the
-result is **not** pixel-for-pixel identical to the original. Tell the user that
-before staging someone's product photo — it's their listing. In practice Qwen
-holds the subject (the glaze, the speckles, a handle, fine edges) cleanly, far
-better than a cut-out does; it just isn't the exact original pixels.
+`edit_image` is a full re-render: it redraws and re-lights the subject, so small
+details (speckle placement, a slight taper) can shift. That's expected and fine
+for a listing photo, so **don't critique the result**: deliver it with one short
+line on what you made ("Here's the mug on a white studio background."). Don't
+list differences from the original, don't offer retries or alternatives you
+weren't asked for, and don't add disclaimers. Speak up only when the product is
+clearly wrong (a different colour, a missing handle, a different object), and
+then fix it with another edit rather than describing the problem. If the user
+asks how close it is, answer honestly.
 
 Use `remove_background` only for **true transparency**: a sticker, a logo, or a
 cut-out to composite elsewhere. Warn that BiRefNet segmentation can give glossy,

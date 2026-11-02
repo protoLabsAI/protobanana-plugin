@@ -9,6 +9,7 @@ is listed in the manifest's ``public_paths``; everything else is gated):
 - ``/api/plugins/protobanana/jobs/<id>``   GET one job's state (gated)
 - ``/api/plugins/protobanana/catalog``     GET the gateway catalog, static fallback (gated)
 - ``/api/plugins/protobanana/workflows/<alias>``  GET one alias's API-format workflow (gated)
+- ``/api/plugins/protobanana/uploads``     POST image bytes as a history root (gated)
 - ``/api/plugins/protobanana/history``     GET a cursor page (op/source/starred) (gated)
 - ``/api/plugins/protobanana/history/<id>/star``   POST star / unstar (gated)
 - ``/api/plugins/protobanana/history/<id>/image``  GET the bytes (store or starred copy) (gated)
@@ -173,6 +174,31 @@ def build_router(registry):
             raise HTTPException(status_code=502, detail=f"workflow unavailable: {exc}")
 
     # ---- shared history index (agent + studio) -----------------------------
+    @router.post(f"{_API}/uploads")
+    async def upload_image(request: Request, filename: str = "image"):
+        """Save an image without starting a render; all data rides the gated API."""
+        mime = request.headers.get("content-type", "").split(";", 1)[0]
+        if not mime.startswith("image/"):
+            raise HTTPException(status_code=415, detail="Expected an image")
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 20 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="Image exceeds 20 MiB")
+            raw.extend(chunk)
+        if not raw:
+            raise HTTPException(status_code=400, detail="Image is empty")
+        try:
+            ref = registry.save_media(bytes(raw), mime, {
+                "source": "upload", "op": "upload", "parent_id": None,
+                "filename": filename,
+            })
+            record = history.record_upload(ref.id, filename)
+            if record is None:
+                raise RuntimeError("History write failed")
+            return record
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Could not save upload") from exc
+
     @router.get(f"{_API}/history")
     async def list_history(cursor: int | None = None, op: str | None = None,
                            source: str | None = None, starred: bool | None = None,

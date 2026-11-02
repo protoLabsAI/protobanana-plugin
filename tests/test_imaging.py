@@ -489,3 +489,32 @@ def test_preserved_fraction_measures_the_unchanged_share(plugin):
     assert mod.imaging.preserved_fraction(png(before), png(before)) == 1.0
     assert mod.imaging.preserved_fraction(png(before), png(after)) == pytest.approx(0.5)
     assert mod.imaging.preserved_fraction(b"not an image", png(after)) is None
+
+
+@pytest.mark.parametrize("size,target,margins,resize", [
+    ((1200, 624), "1:1", (0, 288, 0, 288), None),            # banner -> square: grow height
+    ((1200, 624), "1024x1024", (0, 288, 0, 288), (1024, 1024)),
+    ((1024, 1024), "16:9", (400, 0, 400, 0), None),           # square -> wide: grow width (to 8px grid)
+    ((1024, 1024), "1:1", (0, 0, 0, 0), None),                # already there
+])
+def test_margins_for_target_centres_and_only_adds_canvas(plugin, size, target, margins, resize):
+    mod, _ = plugin
+    buf = io.BytesIO()
+    Image.new("RGB", size, (20, 24, 40)).save(buf, format="PNG")
+    assert mod.imaging.margins_for_target(buf.getvalue(), target) == (margins, resize)
+
+
+def test_margins_for_target_rejects_unreadable_targets(plugin):
+    mod, _ = plugin
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 32)).save(buf, format="PNG")
+    for bad in ("square", "", "0:1", "16/9"):
+        assert mod.imaging.margins_for_target(buf.getvalue(), bad) is None
+
+
+def test_resize_to_exact_size(plugin):
+    mod, _ = plugin
+    buf = io.BytesIO()
+    Image.new("RGB", (1200, 1200)).save(buf, format="PNG")
+    out = mod.imaging.resize_to(buf.getvalue(), (1024, 1024))
+    assert Image.open(io.BytesIO(out)).size == (1024, 1024)

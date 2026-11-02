@@ -514,3 +514,58 @@ def validate_mask(raw: bytes, source: bytes) -> bytes:
         output = io.BytesIO()
         rgba.save(output, format="PNG")
         return output.getvalue()
+
+
+def margins_for_target(image: bytes, target: str):
+    """Centred outpaint margins that take ``image`` to ``target``'s aspect.
+
+    ``target`` is "W:H" (aspect only) or "WxH" (aspect, then a final resize to that
+    size). Only ever adds canvas: the short side grows to fit. Margins are rounded
+    to multiples of 8 for the model's grid. Returns ``((left, top, right, bottom),
+    resize_to)`` where ``resize_to`` is ``(W, H)`` or None, or None if the target
+    or the image can't be read."""
+    import re
+
+    m = re.fullmatch(r"\s*(\d+)\s*([:x×])\s*(\d+)\s*", target or "")
+    if not m:
+        return None
+    tw, sep, th = int(m.group(1)), m.group(2), int(m.group(3))
+    if tw <= 0 or th <= 0:
+        return None
+    Image = _pil()
+    if Image is None:
+        return None
+    try:
+        w, h = Image.open(io.BytesIO(image)).size
+    except Exception:  # noqa: BLE001 — an unreadable image is a readable tool error
+        return None
+    resize_to = (tw, th) if sep != ":" else None
+    if w * th >= h * tw:  # too wide: grow height
+        extra = round(w * th / tw) - h
+        a = (extra // 2 + 7) // 8 * 8
+        b = (extra - extra // 2 + 7) // 8 * 8
+        margins = (0, a, 0, b) if extra > 0 else (0, 0, 0, 0)
+    else:  # too tall: grow width
+        extra = round(h * tw / th) - w
+        a = (extra // 2 + 7) // 8 * 8
+        b = (extra - extra // 2 + 7) // 8 * 8
+        margins = (a, 0, b, 0)
+    if resize_to == (w, h) and not any(margins):
+        resize_to = None
+    return margins, resize_to
+
+
+def resize_to(image: bytes, size: tuple[int, int]) -> bytes:
+    """Resize ``image`` to exactly ``size`` (LANCZOS); returns the input if it can't."""
+    Image = _pil()
+    if Image is None:
+        return image
+    try:
+        img = Image.open(io.BytesIO(image))
+        if img.size == tuple(size):
+            return image
+        out = io.BytesIO()
+        img.resize(tuple(size), Image.LANCZOS).save(out, format="PNG")
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 — a failed resize keeps the extended image
+        return image

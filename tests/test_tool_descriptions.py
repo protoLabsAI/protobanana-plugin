@@ -54,4 +54,5 @@ def test_same_design_new_shape_routes_to_outpaint(registered_tools):
     out = " ".join(registered_tools["outpaint_image"].description.split())
     assert "Use outpaint_image on the existing image instead" in gen
     assert "SAME design in another shape or size" in out
-    assert "top 288, bottom 288" in out
+    assert 'target="1:1"' in out
+    assert "you don't need the image's size" in out

@@ -595,15 +595,17 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
 
 @tool
 async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: int = 0,
-                         right: int = 0, bottom: int = 0, seed: int = -1) -> str:
+                         right: int = 0, bottom: int = 0, seed: int = -1,
+                         target: str = "") -> str:
     """Extend an image's canvas outward (outpaint) by pixel margins.
 
     The right tool for the SAME design in another shape or size: a square social
     card from a wide banner, a tall story from a square, a wider hero. It keeps the
-    existing artwork exactly and only adds canvas. Work out the margins to reach the
-    target aspect: e.g. a 1200x624 banner -> square = top 288, bottom 288 (1200x1200);
-    split evenly so the design stays centred. Describe the new areas in prompt
-    (e.g. "extend the dark background, plain, no new objects or text").
+    existing artwork exactly and only adds canvas. For a new shape, pass target
+    (e.g. target="1:1", "4:5", "16:9" or "1024x1024") and leave the margins at 0:
+    the tool works out centred margins itself, so you don't need the image's size.
+    Describe the new areas in prompt (e.g. "extend the dark background, plain, no
+    new objects or text").
 
     Args:
         image_ref: The image (media id, /media/ URL, data: URL, or path).
@@ -613,20 +615,33 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
         right: Pixels to add on the right.
         bottom: Pixels to add on the bottom.
         seed: Fixed seed; -1 = random.
+        target: Aspect ratio "W:H" or size "WxH" to extend to (centred). Overrides the
+            margins. A WxH target is extended to that aspect, then resized to WxH.
     Returns markdown with the extended image and its media id, or a readable error.
     """
     try:
-        if not any((left, top, right, bottom)):
-            return "Error: give at least one non-zero margin (left/top/right/bottom)."
         source = _resolve_image(image_ref)
+        resize_to = None
+        if target:
+            plan = imaging.margins_for_target(source, target)
+            if plan is None:
+                return (f"Error: couldn't read target {target!r}; use an aspect like \"1:1\" "
+                        "or a size like \"1024x1024\".")
+            (left, top, right, bottom), resize_to = plan
+            if not any((left, top, right, bottom)) and resize_to is None:
+                return f"Error: the image is already {target}; nothing to extend."
+        if not any((left, top, right, bottom)):
+            return "Error: give at least one non-zero margin (left/top/right/bottom) or a target."
         prep = imaging.prepare(source)
         raw = await client.edit(CFG["outpaint_model"], prompt or "extend the scene", prep.data,
                                 fields={"left": left, "top": top, "right": right,
                                         "bottom": bottom, "seed": _seed(seed)})
+        if resize_to is not None:
+            raw = imaging.resize_to(raw, resize_to)
         return _finish(raw, _caption(prompt, "Extended: ") if prompt else "Extended image",
                        {"tool": "outpaint_image", "model": CFG["outpaint_model"],
                         "image": image_ref, "prompt": prompt, "left": left, "top": top,
-                        "right": right, "bottom": bottom, "seed": seed},
+                        "right": right, "bottom": bottom, "seed": seed, "target": target},
                        note=_transparency_note(prep, False),
                        source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:

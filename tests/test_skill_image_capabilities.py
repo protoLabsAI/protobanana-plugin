@@ -106,3 +106,10 @@ def test_operation_table_routes_staging_and_transparency():
     for term in ("true transparency only", "sticker", "logo", "composite elsewhere",
                  "glossy", "reflective", "fine-edged", "rough edges", "birefnet"):
         assert term in transparency
+
+
+def test_recipe_discloses_legacy_fallback_limitation():
+    recipe = _recipe_section(_skill_text()).lower()
+    assert 'legacy-editor fallback' in recipe
+    assert 'may\nchange the product' in recipe
+    assert 'do not claim the original pixels were preserved' in recipe

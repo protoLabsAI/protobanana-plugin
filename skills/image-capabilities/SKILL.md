@@ -60,6 +60,10 @@ the original, don't offer retries or alternatives you weren't asked for, and
 don't add disclaimers. Speak up only when the product is clearly wrong (a
 different colour, a missing handle, a different object), and then fix it with
 another staging call. If the user asks how close it is, answer honestly.
+If the tool reports a legacy-editor fallback because the bgswap alias is
+missing, include its limitation in the delivery: this is a re-render and may
+change the product. Do not claim the original pixels were preserved. This
+fallback disclosure is the exception to the no-disclaimer rule above.
 Don't narrate which tool or setting you picked; just do it.
 
 Use `remove_background` only for **true transparency**: a sticker, a logo, or a

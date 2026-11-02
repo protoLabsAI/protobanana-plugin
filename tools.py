@@ -17,6 +17,7 @@ import logging
 import re
 from pathlib import Path
 
+import httpx
 from langchain_core.tools import tool
 
 from . import client, history, imaging
@@ -428,12 +429,41 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
 @tool
 async def stage_product(image_ref: str, scene: str, subject: str = "the product",
                         seed: int = -1) -> str:
-    """Put a product or object from a photo onto a new background or into a new scene (white studio background, kitchen counter, wooden table...) while keeping the product exactly as photographed: only the background is generated, the product's own pixels are kept. Use this for shop and listing photos. subject: a short noun phrase for the product ("the mug"). scene: the new background, including lighting and a natural contact shadow."""
+    """Put a product or object from a photo onto a new background or into a new scene (white studio background, kitchen counter, wooden table...) while keeping the product exactly as photographed: only the background is generated, the product's own pixels are kept. Use this for shop and listing photos. subject: a short noun phrase for the product ("the mug"). scene: the new background, including lighting and a natural contact shadow. If the gateway lacks the background-swap alias, falls back to the legacy editor and labels the result as a re-render that may change the product."""
     try:
         source = _resolve_image(image_ref)
         prep = imaging.prepare(source)
-        raw = await client.edit(CFG["bgswap_model"], scene, prep.data,
-                                fields={"grounding": subject, "seed": _seed(seed)})
+        try:
+            raw = await client.edit(CFG["bgswap_model"], scene, prep.data,
+                                    fields={"grounding": subject, "seed": _seed(seed)})
+        except httpx.HTTPStatusError as exc:
+            # Older gateways may not have deployed bgswap yet. Preserve the
+            # previous chat staging path, but never describe its re-render as
+            # pixel-preserving. Other failures must not trigger another render.
+            message = exc.response.text.lower()
+            missing = exc.response.status_code == 404 or (
+                exc.response.status_code == 400 and any(term in message for term in (
+                    "invalid model name", "model not found", "unknown model", "alias missing",
+                ))
+            )
+            if not missing or CFG["bgswap_model"] == CFG["edit_model"]:
+                raise
+            prompt = (f"Place {subject} in this scene: {scene}. "
+                      "Keep the product's shape, colour and details unchanged.")
+            raw = await client.edit(CFG["edit_model"], prompt, prep.data,
+                                    fields={"seed": _seed(seed)})
+            if imaging.unchanged(prep.data, raw):
+                return _NO_CHANGE_EDIT
+            raw = imaging.finish_edit(raw, prep, keep_transparency=False)
+            return _finish(
+                raw, _caption(scene, "Staged: "),
+                {"tool": "edit_image", "model": CFG["edit_model"], "image": image_ref,
+                 "prompt": prompt, "seed": seed, "draft": False, "keep_transparency": False},
+                note=("Background-only staging is unavailable on this gateway; used the legacy "
+                      "editor. This is a re-render and may change the product. Include this "
+                      "limitation when delivering the image; its original pixels are not guaranteed."),
+                source_bytes=source, source_name=_ref_name(image_ref),
+            )
         return _finish(raw, _caption(scene, "Staged: "),
                        {"tool": "stage_product", "model": CFG["bgswap_model"],
                         "image": image_ref, "scene": scene, "subject": subject, "seed": seed},

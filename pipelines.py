@@ -398,6 +398,10 @@ def validate(spec) -> dict:
         # Templated scalar params: the referenced input must exist (else dangling)
         # and must not feed an image/mask into a text/int port (image→text).
         params = step.get("params") or {}
+        if op == "stage_product" and (
+            not isinstance(params.get("scene"), str) or not params["scene"].strip()
+        ):
+            errors.append(f"step {sid!r} (stage_product) requires a non-empty scene parameter")
         for pname, pval in params.items():
             if not isinstance(pval, str):
                 continue

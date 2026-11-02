@@ -140,3 +140,95 @@ def test_gateway_failure_is_readable(plugin, monkeypatch):
     assert out.startswith("Error:") and "alias missing" in out
     invalid = asyncio.run(mod.tools.stage_product.ainvoke({"image_ref": "", "scene": "studio"}))
     assert invalid.startswith("Error:")
+
+
+@pytest.mark.parametrize('status,message', [
+    (404, 'alias missing'),
+    (400, 'Invalid model name passed in model=custom/bgswap'),
+])
+def test_missing_alias_uses_legacy_editor_with_honest_provenance(plugin, monkeypatch, status, message):
+    import io
+
+    from PIL import Image
+
+    mod, reg, calls = plugin
+    mod.tools.CFG.update(bgswap_model='custom/bgswap', edit_model='custom/edit')
+    buf = io.BytesIO()
+    Image.new('RGB', (1, 1), 'blue').save(buf, format='PNG')
+    rendered = buf.getvalue()
+
+    class Gateway:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, path, **kwargs):
+            calls.append((path, kwargs))
+            request = httpx.Request('POST', 'https://gateway.example' + path)
+            if kwargs['data']['model'] == 'custom/bgswap':
+                return httpx.Response(status, text=message, request=request)
+            return httpx.Response(200, request=request, json={
+                'data': [{'b64_json': base64.b64encode(rendered).decode()}],
+            })
+
+    monkeypatch.setattr(sys.modules['graph.sdk'], 'gateway_client', lambda **kw: Gateway())
+    out = asyncio.run(mod.tools.stage_product.ainvoke({
+        'image_ref': IMAGE, 'scene': 'wooden table', 'subject': 'the mug', 'seed': 42,
+    }))
+    assert len(calls) == 2
+    assert all(path == '/images/edits' for path, _ in calls)
+    form = calls[1][1]['data']
+    assert form['model'] == 'custom/edit'
+    assert form['seed'] == '42'
+    assert 'the mug' in form['prompt'] and 'wooden table' in form['prompt']
+    assert 'grounding' not in form
+    assert calls[1][1]['files'] == calls[0][1]['files']
+    assert 'may change the product' in out and '![Staged:' in out
+    assert '\x1e[component-v1]' in out
+    assert reg.saved_media[-1][2]['model'] == 'custom/edit'
+    assert not mod.history.read(op='stage_product')['records']
+    record = mod.history.read(op='edit')['records'][0]
+    assert record['alias'] == 'custom/edit'
+    assert record['params']['prompt'] == form['prompt']
+    assert record['params']['keep_transparency'] is False
+
+    async def rerun():
+        job_id = mod.jobs.submit('edit', record['params'], alias=record['alias'])
+        await mod.jobs._jobs[job_id]['_task']
+        assert mod.jobs.get_state(job_id)['status'] == 'done'
+
+    asyncio.run(rerun())
+    assert calls[2] == calls[1]
+
+
+@pytest.mark.parametrize('status,message', [
+    (400, 'invalid grounding'), (401, 'unauthorized'), (403, 'forbidden'),
+    (429, 'rate limited'), (500, 'backend failed'), (524, 'timeout'),
+])
+def test_other_failures_do_not_fallback(plugin, monkeypatch, status, message):
+    mod, reg, _ = plugin
+    calls = []
+
+    async def fail(*args, **kwargs):
+        calls.append(args)
+        httpx.Response(status, text=message, request=httpx.Request(
+            'POST', 'https://gateway.example/images/edits')).raise_for_status()
+
+    monkeypatch.setattr(mod.client, 'edit', fail)
+    out = asyncio.run(mod.tools.stage_product.ainvoke({'image_ref': IMAGE, 'scene': 'studio'}))
+    assert out.startswith('Error:')
+    assert len(calls) == 1
+    assert not reg.saved_media
+
+
+@pytest.mark.parametrize('scene', [None, '', '  ', 42])
+def test_pipeline_requires_scene_at_save_time(plugin, scene):
+    mod, _, _ = plugin
+    params = {} if scene is None else {'scene': scene}
+    out = asyncio.run(mod.tools.save_pipeline.ainvoke({'spec': {
+        'id': 'missing-scene', 'inputs': {'photo': 'image'},
+        'steps': [{'id': 'stage', 'op': 'stage_product', 'image': 'photo', 'params': params}],
+    }}))
+    assert out.startswith('Error:') and 'scene' in out

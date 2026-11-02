@@ -5,7 +5,7 @@ backed by the [protoBanana](https://github.com/protoLabsAI/protoBanana) gateway 
 ComfyUI workflows (Qwen-Image-2.1 / 2.1 Turbo, SAM 3 region edit, BiRefNet background
 removal) behind LiteLLM.
 
-The agent gets seven image tools; every result is persisted to the core media store, renders
+The agent gets eight image tools; every result is persisted to the core media store, renders
 inline in chat, and — on a vision model — is attached to the tool result so the agent can
 **see** what it just made and iterate (generate → look → refine). Three more tools
 (`list_pipelines`, `run_pipeline`, `save_pipeline`) run and author **pipelines** — saved,
@@ -15,6 +15,7 @@ re-runnable graphs that chain these operations (see `skills/pipelines/SKILL.md`)
 |---|---|---|---|
 | `generate_image` | `/images/generations` | `protolabs/qwen-image` (`gen_model`); draft: `protolabs/qwen-image-2-1-turbo` (`fast_gen_model`) | Text-to-image — `draft: true` routes to the 8-step Qwen-Image-2.1 Turbo tier (~10s vs ~32s warm) for rapid prototyping |
 | `edit_image` | `/images/edits` | `protolabs/qwen-image-edit` (`edit_model`); draft: `protolabs/qwen-image-edit-turbo` (`fast_edit_model`) | Global/semantic instruction edits — `draft: true` uses the Turbo editor (~10s vs ~38s) |
+| `stage_product` | `/images/edits` (+`grounding`) | `protolabs/qwen-image-bgswap` (`bgswap_model`) | Replace the background while keeping the photographed product |
 | `region_edit` | `/images/edits` (+`grounding`) | `protolabs/qwen-image-region-edit` (`region_model`) | Change one object (SAM 3 mask), leave the rest untouched |
 | `remove_background` | `/images/edits` | `protolabs/qwen-image-bgremove` (`bgremove_model`) | Sticker/cutout on transparency (BiRefNet) |
 | `compose_images` | `/chat/completions` | `protolabs/qwen-image-multiref` (`compose_model`) | Combine 2–10 references into one image (Qwen-Image-2.1 native multi-ref) |
@@ -37,6 +38,13 @@ Requires the gateway's `model_list` to expose protoBanana aliases (see
 `protoagent.plugin.yaml` for the defaults — `protolabs/qwen-image` etc.; every alias is a
 plugin setting). No extra pip deps, no extra network hosts: all traffic rides
 `graph.sdk.gateway_client()` to the already-configured model gateway.
+
+Product staging requires `protolabs/qwen-image-bgswap` (or the configured
+`bgswap_model`) for pixel preservation. On gateways missing that alias, the chat
+tool falls back to `edit_model` and labels the result as a re-render that may
+change the product. Fallback results are recorded as edits with the actual model.
+Studio and pipeline `stage_product` steps require the bgswap alias and fail
+readably if it is missing; they never silently substitute a full-image editor.
 
 Built on protoAgent core seams [#1929](https://github.com/protoLabsAI/protoAgent/issues/1929)
 (`registry.save_media`), [#1930](https://github.com/protoLabsAI/protoAgent/issues/1930)

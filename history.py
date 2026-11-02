@@ -41,6 +41,7 @@ importable with no host; tests monkeypatch both.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -283,7 +284,14 @@ def _primary_ref(params: dict):
     return ref
 
 
-def record_agent(media_id: str, meta: dict | None) -> dict | None:
+# Sentinel for record_agent(parent_id=...): the default derives the parent from
+# the input ref (today's behavior); an explicit value (even None) overrides it,
+# so a tool that recorded a chat attachment as a source item can chain the
+# result to that source's media id instead (bd-s1el).
+_DERIVE = object()
+
+
+def record_agent(media_id: str, meta: dict | None, parent_id=_DERIVE) -> dict | None:
     """Write a ``source="agent"`` record from an agent tool's ``save_media``
     meta. Wrapped so a malformed meta (or a raising ``append``) can never
     propagate into the tool (tools never raise). Returns the record for bus
@@ -294,14 +302,19 @@ def record_agent(media_id: str, meta: dict | None) -> dict | None:
     input image reference (``image``/``images``) and the ``seed`` — is KEPT, in
     the exact shape ``jobs._dispatch`` consumes, so a Gallery re-run of an agent
     record resubmits a working job (and a locked seed reproduces) instead of
-    dying on a missing ``image`` (design §3.1 / S2)."""
+    dying on a missing ``image`` (design §3.1 / S2).
+
+    ``parent_id`` defaults to the id derived from the input ref; a caller that
+    saved a non-history input as a source item passes that item's media id so
+    the lineage reads attachment → result (bd-s1el)."""
     try:
         meta = dict(meta or {})
         tool = meta.get("tool") or ""
         params = {k: v for k, v in meta.items() if k not in ("tool", "model")}
         record = {
             "media_id": media_id,
-            "parent_id": _media_id_of(_primary_ref(params)),
+            "parent_id": (_media_id_of(_primary_ref(params))
+                          if parent_id is _DERIVE else parent_id),
             "op": _TOOL_OP.get(tool, tool or "unknown"),
             "alias": meta.get("model"),
             "params": params,
@@ -316,14 +329,50 @@ def record_agent(media_id: str, meta: dict | None) -> dict | None:
         log.exception("[protobanana] record_agent failed")
 
 
-def record_upload(media_id: str, filename: str) -> dict | None:
-    """Persist an upload root, reporting index failure to the upload route."""
+def record_upload(media_id: str, filename: str | None, *, source: str = "upload",
+                  content_hash: str | None = None) -> dict | None:
+    """Persist an upload/attachment root (no parent, op ``upload``), reporting
+    index failure to the caller.
+
+    ``source`` is ``"upload"`` for an Images-view upload (bd-7kf2) and
+    ``"attachment"`` for a chat attachment an image tool recorded as a lineage
+    source (bd-s1el); ``content_hash`` (when given) lets :func:`lookup_source`
+    dedup the same bytes used again."""
     record = {
         "media_id": media_id, "parent_id": None, "op": "upload", "alias": None,
-        "params": {"filename": filename}, "source": "upload", "job_id": None,
+        "params": {"filename": filename}, "source": source, "job_id": None,
         "created": time.time(), "starred": False,
     }
+    if content_hash:
+        record["content_hash"] = content_hash
     return {**record, "pruned": False} if append(record) else None
+
+
+def content_hash(raw: bytes) -> str:
+    """A stable content fingerprint for a tool's input bytes — the dedup key for
+    a recorded source item, so the same attachment used twice is recorded once."""
+    return hashlib.sha256(raw).hexdigest()
+
+
+def lookup_source(candidate: str | None, chash: str | None) -> str | None:
+    """The media id to use as a tool result's lineage parent when the input is
+    already represented in history, else ``None`` (the caller must record it).
+
+    A ``candidate`` (the media id the input ref names) that already has ANY
+    history record wins — that is today's parentage, untouched. Otherwise the
+    earliest source record whose ``content_hash`` matches ``chash`` is reused, so
+    re-attaching the same photo doesn't create a second source item. One bounded
+    scan of the log."""
+    if not candidate and not chash:
+        return None
+    hash_hit = None
+    for rec in _load_tagged():
+        mid = rec.get("media_id")
+        if candidate and mid == candidate:
+            return candidate
+        if chash and hash_hit is None and rec.get("content_hash") == chash:
+            hash_hit = mid
+    return hash_hit
 
 
 def record_studio(state: dict, media_id: str) -> None:

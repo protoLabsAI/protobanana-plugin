@@ -304,11 +304,17 @@ def test_agent_image_records_are_rerunnable(env, monkeypatch):
         for op in ("edit", "region_edit", "remove_background", "outpaint"):
             assert by_op[op]["params"].get("image"), f"{op} record dropped its image ref"
         assert by_op["compose"]["params"].get("images"), "compose record kept no refs"
+        # The shared data-URL input is also recorded once as a lineage source
+        # (op "upload", source "attachment", bd-s1el); it is not a re-runnable
+        # render, so it is excluded from the re-run below.
+        assert by_op["upload"]["source"] == "attachment"
 
         # Re-run each agent record exactly as Gallery.rerun does: op + params +
         # the recorded alias. On ONE event loop so the per-operator lock binds to
         # it; sequential (await each task) so the single in-flight slot is free.
         for op, rec in by_op.items():
+            if op == "upload":
+                continue  # a source attachment root, not a render to re-run
             jid = mod.jobs.submit(rec["op"], dict(rec["params"]), alias=rec["alias"])
             await _task(mod, jid)
             st = mod.jobs.get_state(jid)

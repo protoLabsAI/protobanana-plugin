@@ -74,14 +74,23 @@ def test_multipart_and_saved_mask_lineage(plugin, monkeypatch, surface):
         assert b'name="image"; filename="image.png"' in request.content
         assert base64.b64encode(mask) in request.content
         assert b"protolabs/qwen-image-inpaint" in request.content
-        assert len(reg.saved_media) == 2
-        saved = Image.open(io.BytesIO(reg.saved_media[0][0]))
+        # The tool also records the data-URL image as a lineage source (bd-s1el):
+        # mask, source, result → 3 saves and the result is fake-media-3. The job
+        # surface doesn't record a source (the UI already supplies parentage), so
+        # it saves just mask + result.
+        if surface == "tool":
+            assert len(reg.saved_media) == 3
+            result_id = "fake-media-3"
+        else:
+            assert len(reg.saved_media) == 2
+            result_id = "fake-media-2"
+        saved = Image.open(io.BytesIO(reg.saved_media[0][0]))  # the mask, saved first
         assert saved.size == (32, 24)
         assert saved.getpixel((0, 0))[3] == 255
         assert saved.getpixel((10, 10))[3] == 0
         record = mod.history.read()["records"][0]
         assert record["params"]["mask"] == "fake-media-1"
-        assert record["media_id"] == "fake-media-2"
+        assert record["media_id"] == result_id
 
     asyncio.run(scenario())
 

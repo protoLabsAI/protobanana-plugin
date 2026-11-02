@@ -407,6 +407,31 @@ def test_region_edit_and_outpaint_dispatch(plugin, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_outpaint_rerun_honours_target(plugin, monkeypatch):
+    """A Gallery re-run of an agent outpaint with a WxH target recomputes margins and resizes."""
+    import io
+
+    from PIL import Image
+
+    mod, _ = plugin
+    calls = []
+    monkeypatch.setattr(mod.client, "edit", _edit_recorder(calls))
+    resized = []
+    real = mod.imaging.resize_to
+    monkeypatch.setattr(mod.imaging, "resize_to", lambda raw, size: resized.append(size) or real(raw, size))
+    buf = io.BytesIO()
+    Image.new("RGB", (1200, 624)).save(buf, format="PNG")
+
+    async def scenario():
+        await _task(mod, mod.jobs.submit(
+            "outpaint", {"image": _data_url(buf.getvalue()), "target": "1024x1024",
+                         "left": 0, "top": 288, "right": 0, "bottom": 288}))
+
+    asyncio.run(scenario())
+    assert calls[0]["fields"]["top"] == 288 and calls[0]["fields"]["bottom"] == 288
+    assert resized == [(1024, 1024)]
+
+
 def test_remove_background_and_compose_dispatch(plugin, monkeypatch):
     mod, _ = plugin
     edits = []

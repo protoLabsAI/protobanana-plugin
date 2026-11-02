@@ -46,3 +46,13 @@ def test_edit_image_routes_product_photos_to_stage_product(registered_tools):
     description = " ".join(registered_tools["edit_image"].description.split())
     assert ("For product or listing photos where the product must stay exactly as "
             "photographed, use stage_product instead.") in description
+
+
+def test_same_design_new_shape_routes_to_outpaint(registered_tools):
+    """'A square version of the same design' must outpaint the existing image, not regenerate it."""
+    gen = " ".join(registered_tools["generate_image"].description.split())
+    out = " ".join(registered_tools["outpaint_image"].description.split())
+    assert "Use outpaint_image on the existing image instead" in gen
+    assert "SAME design in another shape or size" in out
+    assert 'target="1:1"' in out
+    assert "you don't need the image's size" in out

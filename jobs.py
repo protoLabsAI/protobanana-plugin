@@ -350,10 +350,19 @@ async def _dispatch(st: dict) -> bytes:
                                              "seed": seed})
             return imaging.finish_edit(raw, prep,
                                        keep_transparency=params.get("keep_transparency", True))
-        # outpaint
+        # outpaint — an agent record with a target stores the computed margins AND the
+        # target, so a Gallery re-run recomputes the plan and applies the final resize.
         margins = {k: int(params.get(k) or 0) for k in ("left", "top", "right", "bottom")}
-        return await client.edit(alias, params.get("prompt") or "extend the scene", image,
-                                 fields={**margins, "seed": seed})
+        resize = None
+        if params.get("target"):
+            plan = imaging.margins_for_target(image, params["target"])
+            if plan is not None:
+                (margins["left"], margins["top"], margins["right"], margins["bottom"]), resize = plan
+        if params.get("target") and not any(margins.values()):
+            return imaging.resize_to(image, resize) if resize else image
+        raw = await client.edit(alias, params.get("prompt") or "extend the scene", image,
+                                fields={**margins, "seed": seed})
+        return imaging.resize_to(raw, resize) if resize else raw
 
     # A gateway-only op: dispatch by the snapshot entry's declared route (generic
     # field-forwarding). _run validated the op against the snapshot, and

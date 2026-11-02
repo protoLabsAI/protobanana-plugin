@@ -430,6 +430,13 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         return _err(e)
 
 
+def _subject_not_found(subject: str) -> str:
+    """The background swap found no product for ``subject`` and regenerated the whole photo."""
+    return (f"Error: couldn't find {subject!r} in the photo, so nothing was kept (the result "
+            "would have been a different object). Retry with subject set to a short noun "
+            "phrase for what's actually in the photo, e.g. \"the mug\" or \"the blue bottle\".")
+
+
 def _staged_note(before: bytes, after: bytes) -> str:
     """Tell the agent the product is the photo's own pixels, and that this was checked.
 
@@ -483,6 +490,8 @@ async def stage_product(image_ref: str, scene: str, subject: str = "the product"
                       "limitation when delivering the image; its original pixels are not guaranteed."),
                 source_bytes=source, source_name=_ref_name(image_ref),
             )
+        if imaging.subject_missing(prep.data, raw):
+            return _subject_not_found(subject)
         return _finish(raw, _caption(scene, "Staged: "),
                        {"tool": "stage_product", "model": CFG["bgswap_model"],
                         "image": image_ref, "scene": scene, "subject": subject, "seed": seed},

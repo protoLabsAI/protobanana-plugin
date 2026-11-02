@@ -461,6 +461,18 @@ def preserved_fraction(before: bytes, after: bytes) -> float | None:
         return None
 
 
+# Below this share of input-identical pixels, a background swap kept no product:
+# SAM found nothing for the subject phrase, the inverted mask covered the whole
+# photo, and the model regenerated everything (a different object entirely).
+SUBJECT_MISSING_FRACTION = 0.02
+
+
+def subject_missing(before: bytes, after: bytes) -> bool:
+    """True when a stage_product result kept (almost) none of the input's pixels."""
+    share = preserved_fraction(before, after)
+    return share is not None and share < SUBJECT_MISSING_FRACTION
+
+
 def unchanged(before: bytes, after: bytes) -> bool:
     """True when ``after`` is (near-)pixel-identical to ``before``.
 

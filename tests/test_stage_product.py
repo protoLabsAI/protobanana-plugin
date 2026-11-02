@@ -238,3 +238,52 @@ def test_pipeline_requires_scene_at_save_time(plugin, scene):
         'steps': [{'id': 'stage', 'op': 'stage_product', 'image': 'photo', 'params': params}],
     }}))
     assert out.startswith('Error:') and 'scene' in out
+
+
+def test_subject_not_found_is_a_clear_error_not_a_new_object(plugin, monkeypatch):
+    """SAM found nothing for the phrase: the whole photo came back regenerated. Refuse it."""
+    import io
+
+    from PIL import Image
+
+    mod, reg, _ = plugin
+
+    def png(color):
+        buf = io.BytesIO()
+        Image.new("RGB", (32, 32), color).save(buf, format="PNG")
+        return buf.getvalue()
+
+    photo, regenerated = png((120, 140, 90)), png((250, 250, 250))
+
+    class Gateway:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, path, **kwargs):
+            return httpx.Response(
+                200, json={"data": [{"b64_json": base64.b64encode(regenerated).decode()}]},
+                request=httpx.Request("POST", "https://gateway.example" + path),
+            )
+
+    monkeypatch.setattr(sys.modules["graph.sdk"], "gateway_client", lambda **kw: Gateway())
+    saved_before = len(reg.saved_media)
+    out = asyncio.run(mod.tools.stage_product.ainvoke(
+        {"image_ref": "data:image/png;base64," + base64.b64encode(photo).decode(),
+         "scene": "white studio", "subject": "the product"}))
+    assert out.startswith("Error: couldn't find 'the product' in the photo")
+    assert "the mug" in out
+    assert len(reg.saved_media) == saved_before  # nothing saved
+
+    async def job():
+        job_id = mod.jobs.submit("stage_product", {
+            "image": "data:image/png;base64," + base64.b64encode(photo).decode(),
+            "scene": "white studio", "subject": "the product"}, alias="protolabs/qwen-image-bgswap")
+        await mod.jobs._jobs[job_id]["_task"]
+        return mod.jobs.get_state(job_id)
+
+    st = asyncio.run(job())
+    assert st["status"] == "failed"
+    assert "couldn't find 'the product'" in st["error"]

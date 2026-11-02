@@ -472,3 +472,20 @@ def test_size_clamp_covers_extreme_requests(plugin):
     """QA asked for 10000x50 — clamped to the renderable range, not passed on."""
     mod, _ = plugin
     assert mod.tools._snap_size("10000x50") == (2048, 256)
+
+
+def test_preserved_fraction_measures_the_unchanged_share(plugin):
+    """stage_product reports how much of the result is the input's own pixels."""
+    mod, _ = plugin
+
+    def png(img):
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    before = Image.new("RGB", (40, 40), (120, 140, 90))
+    after = before.copy()
+    ImageDraw.Draw(after).rectangle((0, 0, 19, 39), fill=(255, 255, 255))  # left half replaced
+    assert mod.imaging.preserved_fraction(png(before), png(before)) == 1.0
+    assert mod.imaging.preserved_fraction(png(before), png(after)) == pytest.approx(0.5)
+    assert mod.imaging.preserved_fraction(b"not an image", png(after)) is None

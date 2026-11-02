@@ -85,9 +85,10 @@ def test_gateway_media_history_and_rerun(plugin, custom):
     assert "\x1e[component-v1]" in out
     # The result tells the agent the product is the input's own pixels (measured),
     # so it doesn't read the photo's colour cast as a change and switch tools.
-    assert "Verified: the product is the original photo's own, unchanged pixels" in out
-    assert "100% of the image is pixel-identical to the input" in out
+    assert "Verified: the whole product is copied from the original photo pixel-for-pixel" in out
+    assert "checked: the product area matches the input pixel-for-pixel" in out
     assert "don't retry, switch tools or report it as changed" in out
+    assert "% of the image" not in out  # a share read as "only part of the product"
     record = mod.history.read(op="stage_product")["records"][0]
     assert record["parent_id"]
     assert record["alias"] == alias

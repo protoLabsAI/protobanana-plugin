@@ -21,7 +21,7 @@ def registered_tools():
     return {tool.name: tool for tool in reg.tools}
 
 
-@pytest.mark.parametrize("name", ["remove_background", "edit_image"])
+@pytest.mark.parametrize("name", ["remove_background", "edit_image", "stage_product"])
 def test_tool_has_plain_docstring(registered_tools, name):
     tool = registered_tools[name]
     # The decorated object's __doc__ belongs to StructuredTool; check the
@@ -37,18 +37,12 @@ def test_remove_background_requires_transparency(registered_tools):
     assert "Use ONLY when the user needs real transparency" in description
     assert "a sticker, a logo, or a cut-out to composite elsewhere" in description
     assert "product or object photo on a white background or in a new scene" in description
-    assert "call edit_image on the ORIGINAL photo instead" in description
+    assert "call stage_product on the ORIGINAL photo instead" in description
     assert "don't cut out first" in description
     assert "rough edges on glossy, reflective or fine-edged subjects" in description
 
 
-def test_edit_image_stages_original_product_photo(registered_tools):
+def test_edit_image_routes_product_photos_to_stage_product(registered_tools):
     description = " ".join(registered_tools["edit_image"].description.split())
-    assert "product and listing photos" in description
-    assert '"put it on a white background"' in description
-    assert '"remove the background" (onto white)' in description
-    assert '"put it on a kitchen counter"' in description
-    assert "Pass the ORIGINAL photo" in description
-    assert "keep the subject exactly the same" in description
-    assert "don't run remove_background first" in description
-    assert "Use draft=False for a final product shot" in description
+    assert ("For product or listing photos where the product must stay exactly as "
+            "photographed, use stage_product instead.") in description

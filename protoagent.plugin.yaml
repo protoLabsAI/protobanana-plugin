@@ -68,6 +68,7 @@ config:
   fast_edit_model: protolabs/qwen-image-edit-turbo
   compose_model: protolabs/qwen-image-multiref  # compose rides chat completions (edits is single-image by spec)
   bgremove_model: protolabs/qwen-image-bgremove
+  bgswap_model: protolabs/qwen-image-bgswap
   region_model: protolabs/qwen-image-region-edit
   outpaint_model: protolabs/qwen-image-outpaint
   default_size: 1024x1024

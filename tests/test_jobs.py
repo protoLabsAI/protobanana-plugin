@@ -434,13 +434,13 @@ def test_remove_background_and_compose_dispatch(plugin, monkeypatch):
 # ----------------------------------------------------------------- catalog
 
 
-def test_catalog_has_all_seven_ops(plugin):
+def test_catalog_has_all_eight_ops(plugin):
     mod, _ = plugin
     cat = mod.catalog_static.build_catalog({})
-    assert len(cat) == 7
+    assert len(cat) == 8
     assert {e["op"] for e in cat} == {
         "generate", "edit", "inpaint", "region_edit",
-        "outpaint", "remove_background", "compose"}
+        "outpaint", "remove_background", "compose", "stage_product"}
     gen = next(e for e in cat if e["op"] == "generate")
     assert gen["aliases"]["final"] == "protolabs/qwen-image"
     assert gen["aliases"]["draft"] == "protolabs/qwen-image-2-1-turbo"
@@ -545,14 +545,14 @@ def test_post_jobs_responds_while_render_blocked(plugin, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_catalog_route_returns_seven_ops(plugin):
+def test_catalog_route_returns_eight_ops(plugin):
     mod, reg = plugin
 
     async def scenario():
         async with await _client(_app(reg)) as ac:
             r = await ac.get("/api/plugins/protobanana/catalog")
             assert r.status_code == 200
-            assert len(r.json()["ops"]) == 7
+            assert len(r.json()["ops"]) == 8
 
     asyncio.run(scenario())
 

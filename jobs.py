@@ -313,7 +313,7 @@ async def _dispatch(st: dict) -> bytes:
             raise ValueError("Compose requires 2–10 reference images.")
         return await client.chat_compose(alias, params.get("prompt", ""),
                                          [_image(r) for r in refs])
-    if op in ("edit", "inpaint", "region_edit", "outpaint"):
+    if op in ("edit", "inpaint", "region_edit", "stage_product", "outpaint"):
         # The built-in /images/edits family, each with op-specific form fields.
         prep = imaging.prepare(tools._resolve_image(params["image"]))
         image = prep.data
@@ -340,6 +340,10 @@ async def _dispatch(st: dict) -> bytes:
                                      fields={"seed": seed,
                                              "negative_prompt": params.get("negative_prompt") or None},
                                      mask=mask)
+        if op == "stage_product":
+            return await client.edit(alias, params["scene"], image,
+                                     fields={"grounding": params.get("subject", "the product"),
+                                             "seed": seed})
         if op == "region_edit":
             raw = await client.edit(alias, params.get("prompt", ""), image,
                                     fields={"grounding": params.get("grounding") or params.get("region"),

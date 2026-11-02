@@ -99,6 +99,7 @@ _REF_PORTS: dict[str, dict[str, str]] = {
     "generate": {},
     "edit": {"image": "image"},
     "inpaint": {"image": "image", "mask": "mask"},
+    "stage_product": {"image": "image"},
     "region_edit": {"image": "image"},
     "outpaint": {"image": "image"},
     "remove_background": {"image": "image"},

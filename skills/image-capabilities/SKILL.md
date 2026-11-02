@@ -5,7 +5,7 @@ description: When the user asks what you can do with images — generate, edit, 
 
 # Image capabilities (protoBanana)
 
-You make and edit images with seven tools. Everything runs on self-hosted
+You make and edit images with eight tools. Everything runs on self-hosted
 models through the protoBanana gateway: **Qwen-Image-2.1** (and its 8-step
 **Turbo** tier) for generating and editing, **SAM 3** to find a region from
 words, and **BiRefNet** for background removal. Every result is saved to the
@@ -15,7 +15,7 @@ media store and shown inline, and you can see it to check your work.
 |---|---|---|
 | A new image from a description | `generate_image` | ~30s, `draft=true` ~10s |
 | A whole-image change ("make it night", "watercolor", restage a person) | `edit_image` | ~38s, `draft=true` ~10s |
-| A product/object photo for a shop or listing, on white or in a new scene | `edit_image` on the original photo; keep the subject exactly the same | ~40s |
+| A product/object photo for a shop or listing, on white or in a new scene | `stage_product` on the original photo; keep the product’s own pixels | ~45s |
 | One named thing changed, rest untouched ("make **his shirt** red") | `region_edit` | ~45s |
 | An exact area repainted, given a mask | `inpaint_image` | ~40s |
 | A bigger canvas / different shape | `outpaint_image` | ~40s |
@@ -44,25 +44,23 @@ The first request after the GPU has been idle or switched tasks can take
 ## Stage a product photo
 
 For a product or object photo → shop or listing photo, or a new scene, use
-`edit_image` (Qwen-Image-Edit) on the **original photo**. Describe the new
-background and say to **keep the subject exactly the same**. For example:
-"Replace the messy desk background with a bright white marble kitchen counter
-in soft morning window light. Keep the mug exactly the same."
+`stage_product` on the **original photo**. Only the background is generated;
+the product's own pixels are kept, preserving its shape, glaze and speckles.
+Set `subject` to a short noun phrase such as "the mug", and describe the new
+background, lighting and a natural contact shadow in `scene`. For example:
+"Bright white marble kitchen counter in soft morning window light, with a
+natural contact shadow."
 
 This includes "white background" or "remove the background" requests for product
-photos: "Remove everything except the mug and place it on a pure white seamless
-studio background with a soft natural shadow. Keep the mug exactly the same."
+photos: use `scene="Pure white seamless studio background with a soft natural shadow"`.
 
-`edit_image` is a full re-render: it redraws and re-lights the subject, so small
-details (speckle placement, a slight taper) can shift. That's expected and fine
-for a listing photo, so **don't critique the result**: deliver it with one short
-line on what you made ("Here's the mug on a white studio background."). Don't
-list differences from the original, don't offer retries or alternatives you
-weren't asked for, and don't add disclaimers. Speak up only when the product is
-clearly wrong (a different colour, a missing handle, a different object), and
-then fix it with another edit rather than describing the problem. If the user
-asks how close it is, answer honestly. Don't narrate which tool or setting you
-picked ("per the tool guidance… edit_image, full quality"); just do it.
+**Don't critique the result**: deliver it with one short line on what you made
+("Here's the mug on a white studio background."). Don't list differences from
+the original, don't offer retries or alternatives you weren't asked for, and
+don't add disclaimers. Speak up only when the product is clearly wrong (a
+different colour, a missing handle, a different object), and then fix it with
+another staging call. If the user asks how close it is, answer honestly.
+Don't narrate which tool or setting you picked; just do it.
 
 Use `remove_background` only for **true transparency**: a sticker, a logo, or a
 cut-out to composite elsewhere. Warn that BiRefNet segmentation can give glossy,

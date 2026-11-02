@@ -2,11 +2,9 @@
 
 The skill is prose that steers the agent's tool choice, so a regression here is
 a wrong tool picked at runtime — not a crash a loaded-plugin test would catch.
-Product staging should edit the original photo with Qwen, including white
-background requests, and deliver the re-render without critiquing small
-differences (flag only a clearly wrong product). BiRefNet cut-outs are reserved
-for true transparency; inpainting around them retains rough edges on glossy
-subjects.
+Product staging should preserve the original product pixels with stage_product
+and deliver without unsolicited critique. BiRefNet cut-outs remain reserved
+for true transparency.
 
 Pure filesystem reads + regex (no PyYAML/jsonschema — not dev deps; the repo's
 other doc-adjacent tests parse text the same way): no plugin load, no host.
@@ -49,28 +47,21 @@ def test_frontmatter_names_the_skill():
     assert re.search(r"(?m)^description:\s*\S", fm), "frontmatter needs a description"
 
 
-def test_recipe_routes_product_staging_to_edit_on_original():
+def test_recipe_routes_product_staging_to_stage_product_on_original():
     """Product/listing and new-scene requests use the original, preserving identity."""
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
-    assert "`edit_image` (qwen-image-edit) on the **original photo**" in recipe
+    assert "`stage_product` on the **original photo**" in recipe
     for intent in ("product", "object", "shop", "listing", "new scene"):
         assert intent in recipe
-    assert "keep the subject exactly the same" in recipe
+    assert "product's own pixels are kept" in recipe
     assert "white background" in recipe and "remove the background" in recipe
     assert "pure white seamless" in recipe and "soft natural shadow" in recipe
 
 
-def test_recipe_delivers_re_renders_without_critique():
-    """edit_image re-renders, but the agent delivers without listing differences.
-
-    Operator call (2026-11-02): telling the user every time that the result isn't
-    the exact pixels turned into paragraphs of shape/speckle critique after each
-    listing photo. The skill still names the re-render, flags a clearly wrong
-    product, and answers honestly when asked.
-    """
+def test_recipe_delivers_staged_photos_without_critique():
+    """Deliver staged photos without unsolicited critique (#56)."""
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower().replace("**", "")
-    assert "full re-render" in recipe
-    assert "redraws and re-lights the subject" in recipe
+    assert "only the background is generated" in recipe
     assert "don't critique the result" in recipe
     assert "don't list differences" in recipe
     assert "clearly wrong" in recipe
@@ -90,13 +81,7 @@ def test_recipe_reserves_background_removal_for_true_transparency():
 
 
 def test_recipe_rejects_cutout_then_inpaint_staging():
-    """Do not restore the old cut-out/mask staging route.
-
-    The honesty words it once used ("pixel-for-pixel", "only when the user
-    accepts changes") are deliberately NOT forbidden here — the re-render caveat
-    needs them (see ``test_recipe_warns_edit_image_is_a_re_render``). Only the
-    cut-out-as-mask plumbing is gone.
-    """
+    """Do not restore the old cut-out/mask staging route."""
     text = " ".join(_skill_text().split()).lower().replace("**", "")
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower()
     assert "do not chain `remove_background` → `inpaint_image` to stage a product" in recipe
@@ -113,8 +98,8 @@ def test_operation_table_routes_staging_and_transparency():
     """The quick reference agrees with the recipe's routing and edge caveat."""
     rows = [ln.lower() for ln in _skill_text().splitlines() if ln.startswith("|")]
     staging = next(r for r in rows if "product/object" in r)
-    assert "`edit_image`" in staging and "original photo" in staging
-    assert "keep the subject exactly the same" in staging
+    assert "`stage_product`" in staging and "original photo" in staging
+    assert "product’s own pixels" in staging
     assert "on white" in staging and "new scene" in staging
     assert "inpaint_image" not in staging
     transparency = next(r for r in rows if "`remove_background`" in r)

@@ -68,6 +68,7 @@ _TOOL_OP = {
     # Retired Krea tool: new writes file under edit; records already logged
     # as op "identity" are remapped at read time (_RETIRED_OP in _enrich).
     "identity_edit": "edit",
+    "stage_product": "stage_product",
     "region_edit": "region_edit",
     "remove_background": "remove_background",
     "compose_images": "compose",

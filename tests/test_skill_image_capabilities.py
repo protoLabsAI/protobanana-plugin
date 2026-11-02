@@ -3,8 +3,8 @@
 The skill is prose that steers the agent's tool choice, so a regression here is
 a wrong tool picked at runtime — not a crash a loaded-plugin test would catch.
 Product staging should edit the original photo with Qwen, including white
-background requests — while still telling the user that edit_image re-renders,
-so the result isn't pixel-for-pixel identical. BiRefNet cut-outs are reserved
+background requests, and deliver the re-render without critiquing small
+differences (flag only a clearly wrong product). BiRefNet cut-outs are reserved
 for true transparency; inpainting around them retains rough edges on glossy
 subjects.
 
@@ -60,17 +60,22 @@ def test_recipe_routes_product_staging_to_edit_on_original():
     assert "pure white seamless" in recipe and "soft natural shadow" in recipe
 
 
-def test_recipe_warns_edit_image_is_a_re_render():
-    """edit_image re-renders, so the user must be told it isn't the exact pixels.
+def test_recipe_delivers_re_renders_without_critique():
+    """edit_image re-renders, but the agent delivers without listing differences.
 
-    Guards the honesty caveat the earlier rewrite dropped: a seller's listing
-    shouldn't be altered silently just because the subject usually holds.
+    Operator call (2026-11-02): telling the user every time that the result isn't
+    the exact pixels turned into paragraphs of shape/speckle critique after each
+    listing photo. The skill still names the re-render, flags a clearly wrong
+    product, and answers honestly when asked.
     """
     recipe = " ".join(_recipe_section(_skill_text()).split()).lower().replace("**", "")
     assert "full re-render" in recipe
     assert "redraws and re-lights the subject" in recipe
-    assert "not pixel-for-pixel identical" in recipe
-    assert "tell the user" in recipe
+    assert "don't critique the result" in recipe
+    assert "don't list differences" in recipe
+    assert "clearly wrong" in recipe
+    assert "answer honestly" in recipe
+    assert "tell the user that" not in recipe
 
 
 def test_recipe_reserves_background_removal_for_true_transparency():

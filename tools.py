@@ -108,6 +108,67 @@ def _dims(raw: bytes) -> str:
     return f"{wh[0]}x{wh[1]}" if wh else "image"
 
 
+def _ref_name(ref: str) -> str | None:
+    """The user-facing filename for an image ref, when one is recoverable — the
+    basename of a filesystem path. A data URL, a ``/media/`` URL (its "name" is a
+    media id, not a filename) and a bare media id carry none, so return None."""
+    r = (ref or "").strip()
+    if not r or r.startswith("data:") or "/media/" in r or "/" not in r:
+        return None
+    return Path(r).name or None
+
+
+def _sniff_mime(raw: bytes) -> str:
+    """A best-effort image mime from the leading bytes, so a saved source
+    attachment keeps a sensible store extension; defaults to PNG."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def _record_source(meta: dict, source_bytes: bytes, source_name: str | None) -> str | None:
+    """Ensure the tool's primary input is represented in history, and return the
+    media id to use as the result's lineage parent — else None (fall back to the
+    ref-derived parent).
+
+    The chat-side twin of the Images-view upload record (bd-7kf2): an image a
+    user attached in chat is saved to the media store but never joined history,
+    so a chain started from it began at the first edit with no parent. Here, when
+    the input isn't already a history media item we record it once as a source
+    item (``source="attachment"``, ``op="upload"``, no parent) and chain the
+    result to it, so the lineage reads photo → cut-out → …. Deduplicated by
+    content hash, so the same attachment used twice is recorded once."""
+    ref = history._primary_ref(meta)
+    candidate = history._media_id_of(ref)
+    chash = history.content_hash(source_bytes)
+    existing = history.lookup_source(candidate, chash)
+    if existing is not None:
+        return existing  # already in history (a prior result or recorded source)
+    if candidate:
+        # The ref already names a media-store id with no history record — e.g. a
+        # chat attachment the bridge saved as user_attachment. Record it in place
+        # under that id; the bytes are already stored, so don't re-save them.
+        history.record_upload(candidate, source_name, source="attachment", content_hash=chash)
+        return candidate
+    # A data URL or file path: the bytes aren't in the store under a known id, so
+    # save them once, then record. Only parent to it if the record actually landed.
+    try:
+        sref = _registry.save_media(source_bytes, _sniff_mime(source_bytes),
+                                    {"source": "attachment", "op": "upload",
+                                     "parent_id": None, "filename": source_name})
+    except Exception:  # noqa: BLE001 - a source-record failure must never fail the tool
+        log.exception("[protobanana] failed to persist a source attachment")
+        return None
+    return sref.id if history.record_upload(sref.id, source_name, source="attachment",
+                                            content_hash=chash) is not None else None
+
+
 # Model sizes: multiples of 16 (VAE /8 + 2x2 patchify), within what the Qwen
 # gen workflows render sanely.
 _SIZE_STEP, _SIZE_MIN, _SIZE_MAX = 16, 256, 2048
@@ -157,16 +218,25 @@ def _caption(text: str, prefix: str = "", limit: int = _CAPTION_MAX) -> str:
     return (prefix + first) if first else prefix.rstrip(": ") or "image"
 
 
-def _finish(raw: bytes, caption: str, meta: dict, note: str = "") -> str:
+def _finish(raw: bytes, caption: str, meta: dict, note: str = "", *,
+            source_bytes: bytes | None = None, source_name: str | None = None) -> str:
     """Persist to the core media store and build the tool result.
 
     ``caption`` is the finished alt text (build it with ``_caption``); ``note``
-    is appended to the first line (size/transparency caveats for the model)."""
+    is appended to the first line (size/transparency caveats for the model).
+    ``source_bytes`` is the tool's resolved primary input (the editing tools pass
+    it): when it isn't already a history media item it's recorded once as a
+    lineage source and becomes the result's parent (bd-s1el)."""
+    # Record the input as a lineage source FIRST, so the source's media id is
+    # minted before the result's (the photo precedes the cut-out) and the result
+    # stays the last save_media call for this tool.
+    parent = _record_source(meta, source_bytes, source_name) if source_bytes is not None else None
     ref = _registry.save_media(raw, "image/png", meta)
     # Shared history (design §4): this agent render joins the Studio gallery with
     # source="agent". record_agent never raises — a history write must not break
     # a tool call (tools return readable strings, never raise).
-    record = history.record_agent(ref.id, meta)
+    record = (history.record_agent(ref.id, meta, parent_id=parent) if parent is not None
+              else history.record_agent(ref.id, meta))
     if record is not None:
         try:
             _registry.emit("protobanana.agent.render", {
@@ -339,7 +409,8 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
     """
     try:
         model = CFG["fast_edit_model"] if draft else CFG["edit_model"]
-        prep = imaging.prepare(_resolve_image(image_ref))
+        source = _resolve_image(image_ref)
+        prep = imaging.prepare(source)
         raw = await client.edit(model, prompt, prep.data, fields={"seed": _seed(seed)})
         if imaging.unchanged(prep.data, raw):
             return _NO_CHANGE_EDIT
@@ -349,7 +420,8 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         return _finish(raw, _caption(prompt, "Edit: "),
                        {"tool": "edit_image", "model": model, "image": image_ref,
                         "prompt": prompt, "seed": seed, "draft": draft,
-                        "keep_transparency": keep_transparency}, note=note)
+                        "keep_transparency": keep_transparency}, note=note,
+                       source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
 
@@ -372,7 +444,8 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
     Returns markdown with the result and its media id, or a readable error.
     """
     try:
-        prep = imaging.prepare(_resolve_image(image_ref))
+        source = _resolve_image(image_ref)
+        prep = imaging.prepare(source)
         raw = await client.edit(CFG["region_model"], prompt, prep.data,
                                 fields={"grounding": region, "seed": _seed(seed)})
         if imaging.unchanged(prep.data, raw):
@@ -382,7 +455,8 @@ async def region_edit(image_ref: str, region: str, prompt: str, seed: int = -1,
                        {"tool": "region_edit", "model": CFG["region_model"],
                         "image": image_ref, "region": region, "prompt": prompt,
                         "seed": seed, "keep_transparency": keep_transparency},
-                       note=_transparency_note(prep, keep_transparency))
+                       note=_transparency_note(prep, keep_transparency),
+                       source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
 
@@ -403,14 +477,16 @@ async def remove_background(image_ref: str) -> str:
     Returns markdown with the cutout and its media id, or a readable error.
     """
     try:
-        prep = imaging.prepare(_resolve_image(image_ref))
+        source = _resolve_image(image_ref)
+        prep = imaging.prepare(source)
         raw = await client.edit(CFG["bgremove_model"], "remove background", prep.data)
         # Strip the old background's colour from the soft edges (halo), using
         # the image that was actually matted as the reference.
         raw = imaging.defringe(raw, prep.data)
         return _finish(raw, "Cutout, background removed",
                        {"tool": "remove_background", "model": CFG["bgremove_model"],
-                        "image": image_ref})
+                        "image": image_ref},
+                       source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
 
@@ -437,13 +513,16 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
         refs = [r for r in (image_refs or []) if str(r).strip()]
         if not 2 <= len(refs) <= 10:
             return f"Error: compose_images needs 2–10 image references, got {len(refs)}."
+        resolved = [_resolve_image(r) for r in refs]
         raw = await client.chat_compose(CFG["compose_model"], prompt,
-                                        [imaging.prepare(_resolve_image(r)).data for r in refs])
+                                        [imaging.prepare(b).data for b in resolved])
         # Keep the actual refs (not just their count) so a Gallery re-run of a
         # compose record feeds jobs._dispatch the images again (design §3.1 / S2).
+        # The first ref is the lineage parent (history._primary_ref).
         return _finish(raw, _caption(prompt, "Composite: "),
                        {"tool": "compose_images", "model": CFG["compose_model"],
-                        "images": refs, "prompt": prompt})
+                        "images": refs, "prompt": prompt},
+                       source_bytes=resolved[0], source_name=_ref_name(refs[0]))
     except Exception as e:
         return _err(e)
 
@@ -466,7 +545,8 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
     try:
         if not any((left, top, right, bottom)):
             return "Error: give at least one non-zero margin (left/top/right/bottom)."
-        prep = imaging.prepare(_resolve_image(image_ref))
+        source = _resolve_image(image_ref)
+        prep = imaging.prepare(source)
         raw = await client.edit(CFG["outpaint_model"], prompt or "extend the scene", prep.data,
                                 fields={"left": left, "top": top, "right": right,
                                         "bottom": bottom, "seed": _seed(seed)})
@@ -474,7 +554,8 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
                        {"tool": "outpaint_image", "model": CFG["outpaint_model"],
                         "image": image_ref, "prompt": prompt, "left": left, "top": top,
                         "right": right, "bottom": bottom, "seed": seed},
-                       note=_transparency_note(prep, False))
+                       note=_transparency_note(prep, False),
+                       source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
 
@@ -509,7 +590,8 @@ async def inpaint_image(image_ref: str, mask_ref: str, prompt: str, seed: int = 
                                 fields={"seed": _seed(seed)})
         return _finish(raw, _caption(prompt, "Inpaint: "),
                        {"tool": "inpaint_image", "model": CFG["inpaint_model"],
-                        "image": image_ref, "mask": ref.id, "prompt": prompt, "seed": seed})
+                        "image": image_ref, "mask": ref.id, "prompt": prompt, "seed": seed},
+                       source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
 

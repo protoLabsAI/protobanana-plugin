@@ -13,6 +13,7 @@ when ``show_model`` is on they ride the multimodal envelope (#1930) instead.
 from __future__ import annotations
 
 import base64
+import time
 import logging
 import re
 from pathlib import Path
@@ -732,6 +733,27 @@ async def list_pipelines() -> str:
         return _err(e)
 
 
+def _announce_pipeline_output(run: dict, node: dict, media_id: str) -> None:
+    """Land an agent-run pipeline's output live in the Images view.
+
+    Single tools announce their result on ``protobanana.agent.render`` (from
+    _finish); a pipeline run didn't, so the docked view stayed empty while the
+    image showed only in chat. Same payload shape the view consumes."""
+    try:
+        _registry.emit("protobanana.agent.render", {
+            "media_id": media_id,
+            "op": node.get("op") or "pipeline",
+            "parent_id": node.get("parent_id"),
+            "alias": node.get("alias"),
+            "created": time.time(),
+            "url": f"/api/plugins/protobanana/history/{media_id}/image",
+            "pipeline": run.get("pipeline"),
+            "pipeline_run_id": run.get("run_id"),
+        })
+    except Exception:  # noqa: BLE001 - notification must never fail a tool
+        log.exception("[protobanana] failed to publish protobanana.agent.render for a pipeline")
+
+
 @tool
 async def run_pipeline(name: str, inputs: dict | None = None) -> str:
     """Run a saved or starter image pipeline end to end and return its final image.
@@ -779,6 +801,8 @@ async def run_pipeline(name: str, inputs: dict | None = None) -> str:
             text += ("To show the user the image, include this markdown line VERBATIM in "
                      f"your reply:\n![{run.get('pipeline')} output]({url})\n\n")
         text += f"Pass `{media_id}` as the image reference to edit this result further."
+        if media_id:
+            _announce_pipeline_output(run, node, media_id)
         try:
             from graph.sdk import encode_component
 

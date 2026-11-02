@@ -200,6 +200,13 @@ def test_run_pipeline_tool_runs_starter(tmp_path, monkeypatch):
     assert len(gen) == 1 and len(edit) == 2
     # a readable error is NOT what came back
     assert not out.startswith("Error")
+    # The output is announced so the docked Images view lands it live, like a
+    # single tool's result (the view subscribes to protobanana.agent.render).
+    renders = [data for name, data in reg.emitted if name == "protobanana.agent.render"]
+    assert renders, "run_pipeline must announce its output to the Images view"
+    assert renders[-1]["media_id"] in out
+    assert renders[-1]["url"].endswith(f"/history/{renders[-1]['media_id']}/image")
+    assert renders[-1]["pipeline"] == "product-sticker"
 
 
 def test_run_pipeline_unknown_name_is_readable():

@@ -518,3 +518,37 @@ def test_resize_to_exact_size(plugin):
     Image.new("RGB", (1200, 1200)).save(buf, format="PNG")
     out = mod.imaging.resize_to(buf.getvalue(), (1024, 1024))
     assert Image.open(io.BytesIO(out)).size == (1024, 1024)
+
+
+def test_outpaint_target_extends_a_banner_to_a_square(plugin, monkeypatch):
+    mod, reg = plugin
+    calls = []
+
+    async def fake_edit(model, prompt, image, *, fields=None, mask=None):
+        calls.append(dict(fields or {}))
+        w, h = Image.open(io.BytesIO(image)).size
+        f = fields or {}
+        return png(Image.new("RGB", (w + f["left"] + f["right"], h + f["top"] + f["bottom"])))
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    run(mod.tools.outpaint_image.ainvoke(
+        {"image_ref": data_url(png(Image.new("RGB", (1200, 624)))), "target": "1024x1024"}))
+    assert (calls[0]["top"], calls[0]["bottom"], calls[0]["left"], calls[0]["right"]) == (288, 288, 0, 0)
+    assert open_png(reg.saved_media[-1][0]).size == (1024, 1024)
+
+
+def test_outpaint_target_same_shape_only_resizes(plugin, monkeypatch):
+    """Already the target's shape (800x800 -> 1024x1024): resize, no outpaint, no error."""
+    mod, reg = plugin
+    calls = []
+
+    async def fake_edit(*a, **k):
+        calls.append(1)
+        return b""
+
+    monkeypatch.setattr(mod.client, "edit", fake_edit)
+    out = run(mod.tools.outpaint_image.ainvoke(
+        {"image_ref": data_url(png(Image.new("RGB", (800, 800)))), "target": "1024x1024"}))
+    assert not calls
+    assert "Error" not in out
+    assert open_png(reg.saved_media[-1][0]).size == (1024, 1024)

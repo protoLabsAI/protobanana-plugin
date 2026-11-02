@@ -631,7 +631,14 @@ async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: i
             if not any((left, top, right, bottom)) and resize_to is None:
                 return f"Error: the image is already {target}; nothing to extend."
         if not any((left, top, right, bottom)):
-            return "Error: give at least one non-zero margin (left/top/right/bottom) or a target."
+            if resize_to is None:
+                return "Error: give at least one non-zero margin (left/top/right/bottom) or a target."
+            # Already the target's shape, just a different size: resize only, no outpaint.
+            return _finish(imaging.resize_to(source, resize_to), f"Resized to {target}",
+                           {"tool": "outpaint_image", "model": CFG["outpaint_model"],
+                            "image": image_ref, "prompt": prompt, "left": 0, "top": 0,
+                            "right": 0, "bottom": 0, "seed": seed, "target": target},
+                           source_bytes=source, source_name=_ref_name(image_ref))
         prep = imaging.prepare(source)
         raw = await client.edit(CFG["outpaint_model"], prompt or "extend the scene", prep.data,
                                 fields={"left": left, "top": top, "right": right,

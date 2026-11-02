@@ -41,6 +41,7 @@ _ALIASES: dict[str, dict[str, str | None]] = {
     "generate": {"draft": "fast_gen_model", "final": "gen_model"},
     "edit": {"draft": "fast_edit_model", "final": "edit_model"},
     "inpaint": {"draft": "inpaint_model", "final": "inpaint_model"},
+    "stage_product": {"draft": "bgswap_model", "final": "bgswap_model"},
     "region_edit": {"draft": "region_model", "final": "region_model"},
     "outpaint": {"draft": "outpaint_model", "final": "outpaint_model"},
     "remove_background": {"draft": "bgremove_model", "final": "bgremove_model"},
@@ -49,7 +50,7 @@ _ALIASES: dict[str, dict[str, str | None]] = {
 
 # The order Studio shows ops in (design §3.1 left column). Also fixes the set of
 # ops the catalog route returns.
-OPS = ["generate", "edit", "inpaint", "region_edit", "outpaint",
+OPS = ["generate", "edit", "stage_product", "inpaint", "region_edit", "outpaint",
        "remove_background", "compose"]
 
 _PROMPT = {"type": "string", "title": "Prompt"}
@@ -97,6 +98,14 @@ _PARAMS: dict[str, dict] = {
         "negative_prompt": _NEGATIVE,
         "seed": _SEED,
     }, ["image", "mask", "prompt"]),
+    "stage_product": _schema({
+        "image": {"type": "string", "title": "Image"},
+        "scene": {"type": "string", "title": "Scene",
+                  "description": "New background, lighting and natural contact shadow."},
+        "subject": {"type": "string", "title": "Product", "default": "the product",
+                    "description": "Short noun phrase for the product to preserve."},
+        "seed": _SEED,
+    }, ["image", "scene"]),
     "region_edit": _schema({
         "image": {"type": "string", "title": "Image"},
         "grounding": {"type": "string", "title": "Region",
@@ -138,6 +147,9 @@ _META: dict[str, dict] = {
     "inpaint": {"label": "Inpaint", "route": "/images/edits",
                 "inputs": {"images": 1, "mask": True, "person": False},
                 "typical_latency_s": 38},
+    "stage_product": {"label": "Stage product", "route": "/images/edits",
+                      "inputs": {"images": 1, "mask": False, "person": False},
+                      "typical_latency_s": 45},
     "region_edit": {"label": "Region edit", "route": "/images/edits",
                     "inputs": {"images": 1, "mask": False, "person": False},
                     "typical_latency_s": 40},

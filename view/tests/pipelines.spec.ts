@@ -145,6 +145,35 @@ test("round trip canvas graph → spec → graph preserves steps, refs and ui.po
   expect(b.edges).toEqual(a.edges);
 });
 
+// stage_product is a /images/edits op whose only ref port is `image` (mirrors
+// pipelines.py _REF_PORTS). Regression for the review finding that REF_PORTS had
+// no stage_product entry: a loaded step would get no image edge, and a re-Save
+// via graphToSpec would drop step.image, so the pipeline failed at dispatch.
+test("stage_product round-trips its image ref (REF_PORTS parity with the backend)", () => {
+  const spec: Spec = {
+    id: "shop", name: "Shop photo",
+    inputs: { pic: "image" },
+    steps: [
+      { id: "stage", op: "stage_product", image: "inputs.pic",
+        params: { scene: "white studio background", subject: "the mug" } },
+    ],
+    output: "stage",
+  };
+  // Loading the spec gives the step an image edge from the input (not a widget).
+  const { nodes, edges } = specToGraph(spec, catalog);
+  const imageEdge = edges.find((e) => e.target === "stage" && e.targetHandle === "image");
+  expect(imageEdge?.source).toBe(inputNodeId("pic"));
+  // scene/subject stay scalar params on the node, never ref ports.
+  const stage = nodes.find((n) => n.id === "stage")!.data as OpNodeData;
+  expect(stage.params).toMatchObject({ scene: "white studio background", subject: "the mug" });
+  // Re-saving writes step.image back (the bug: it was dropped) and still validates.
+  const saved = graphToSpec(nodes, edges, { id: "shop", name: "Shop photo" });
+  const stageStep = saved.steps.find((s) => s.id === "stage")!;
+  expect(stageStep.image).toBe("pic");
+  expect(stageStep.params).toMatchObject({ scene: "white studio background", subject: "the mug" });
+  expect(validateSpec(saved).ok).toBe(true);
+});
+
 // Review item 6 (the pure-logic half): a spec that positions only SOME nodes —
 // the bundled YAMLs place op steps (as [x,y] tuples) but not the declared input
 // nodes — is laid out from scratch, inputs in the first column, left→right, with

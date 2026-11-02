@@ -66,7 +66,7 @@ output: cut
   `{ type, default }` mapping. Reference an input inside a text param with
   `{{inputs.NAME}}`.
 - **`steps`** — each has an `id`, an `op` (one of generate, edit, inpaint,
-  region_edit, outpaint, remove_background, compose), optional `image` / `mask` /
+  stage_product, region_edit, outpaint, remove_background, compose), optional `image` / `mask` /
   `images` **ref ports** (each naming an earlier step id or a declared image
   input), and `params` (the op's scalar knobs: prompt, grounding, size, seed, …).
 - **`output`** — the step id whose image is the pipeline's result (defaults to

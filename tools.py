@@ -17,6 +17,7 @@ import logging
 import re
 from pathlib import Path
 
+import httpx
 from langchain_core.tools import tool
 
 from . import client, history, imaging
@@ -34,6 +35,7 @@ _DEFAULTS = {
     "fast_edit_model": "protolabs/qwen-image-edit-turbo",
     "compose_model": "protolabs/qwen-image-multiref",
     "bgremove_model": "protolabs/qwen-image-bgremove",
+    "bgswap_model": "protolabs/qwen-image-bgswap",
     "region_model": "protolabs/qwen-image-region-edit",
     "outpaint_model": "protolabs/qwen-image-outpaint",
     "default_size": "1024x1024",
@@ -65,7 +67,7 @@ def validate_ref(props) -> str | None:
 
 
 def get_tools() -> list:
-    return [generate_image, edit_image, region_edit,
+    return [generate_image, edit_image, stage_product, region_edit,
             remove_background, compose_images, outpaint_image, inpaint_image,
             list_pipelines, run_pipeline, save_pipeline]
 
@@ -389,10 +391,8 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
     object precisely, prefer region_edit; to place a person from one photo into
     another scene, use compose_images with both images.
 
-    Also the right tool for product and listing photos: "put it on a white
-    background", "remove the background" (onto white) or "put it on a kitchen
-    counter". Pass the ORIGINAL photo and say to keep the subject exactly the
-    same; don't run remove_background first. Use draft=False for a final product shot.
+    For product or listing photos where the product must stay exactly as
+    photographed, use stage_product instead.
 
     Args:
         image_ref: A media id from a previous result, a /media/ URL, a data: URL, or a file path.
@@ -421,6 +421,52 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
                        {"tool": "edit_image", "model": model, "image": image_ref,
                         "prompt": prompt, "seed": seed, "draft": draft,
                         "keep_transparency": keep_transparency}, note=note,
+                       source_bytes=source, source_name=_ref_name(image_ref))
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+async def stage_product(image_ref: str, scene: str, subject: str = "the product",
+                        seed: int = -1) -> str:
+    """Put a product or object from a photo onto a new background or into a new scene (white studio background, kitchen counter, wooden table...) while keeping the product exactly as photographed: only the background is generated, the product's own pixels are kept. Use this for shop and listing photos. subject: a short noun phrase for the product ("the mug"). scene: the new background, including lighting and a natural contact shadow. If the gateway lacks the background-swap alias, falls back to the legacy editor and labels the result as a re-render that may change the product."""
+    try:
+        source = _resolve_image(image_ref)
+        prep = imaging.prepare(source)
+        try:
+            raw = await client.edit(CFG["bgswap_model"], scene, prep.data,
+                                    fields={"grounding": subject, "seed": _seed(seed)})
+        except httpx.HTTPStatusError as exc:
+            # Older gateways may not have deployed bgswap yet. Preserve the
+            # previous chat staging path, but never describe its re-render as
+            # pixel-preserving. Other failures must not trigger another render.
+            message = exc.response.text.lower()
+            missing = exc.response.status_code == 404 or (
+                exc.response.status_code == 400 and any(term in message for term in (
+                    "invalid model name", "model not found", "unknown model", "alias missing",
+                ))
+            )
+            if not missing or CFG["bgswap_model"] == CFG["edit_model"]:
+                raise
+            prompt = (f"Place {subject} in this scene: {scene}. "
+                      "Keep the product's shape, colour and details unchanged.")
+            raw = await client.edit(CFG["edit_model"], prompt, prep.data,
+                                    fields={"seed": _seed(seed)})
+            if imaging.unchanged(prep.data, raw):
+                return _NO_CHANGE_EDIT
+            raw = imaging.finish_edit(raw, prep, keep_transparency=False)
+            return _finish(
+                raw, _caption(scene, "Staged: "),
+                {"tool": "edit_image", "model": CFG["edit_model"], "image": image_ref,
+                 "prompt": prompt, "seed": seed, "draft": False, "keep_transparency": False},
+                note=("Background-only staging is unavailable on this gateway; used the legacy "
+                      "editor. This is a re-render and may change the product. Include this "
+                      "limitation when delivering the image; its original pixels are not guaranteed."),
+                source_bytes=source, source_name=_ref_name(image_ref),
+            )
+        return _finish(raw, _caption(scene, "Staged: "),
+                       {"tool": "stage_product", "model": CFG["bgswap_model"],
+                        "image": image_ref, "scene": scene, "subject": subject, "seed": seed},
                        source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)
@@ -468,7 +514,7 @@ async def remove_background(image_ref: str) -> str:
 
     Use ONLY when the user needs real transparency: a sticker, a logo, or a
     cut-out to composite elsewhere. For a product or object photo on a white
-    background or in a new scene, call edit_image on the ORIGINAL photo instead
+    background or in a new scene, call stage_product on the ORIGINAL photo instead
     (don't cut out first). This tool's segmentation gives rough edges on glossy,
     reflective or fine-edged subjects.
 

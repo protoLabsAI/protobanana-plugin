@@ -27,6 +27,7 @@ export const REF_PORTS: Record<string, { name: string; type: RefPortType }[]> = 
   generate: [],
   edit: [{ name: "image", type: "image" }],
   inpaint: [{ name: "image", type: "image" }, { name: "mask", type: "mask" }],
+  stage_product: [{ name: "image", type: "image" }],
   region_edit: [{ name: "image", type: "image" }],
   outpaint: [{ name: "image", type: "image" }],
   remove_background: [{ name: "image", type: "image" }],

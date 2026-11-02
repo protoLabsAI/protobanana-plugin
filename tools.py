@@ -350,6 +350,10 @@ async def generate_image(prompt: str, size: str = "", seed: int = -1, negative_p
                          draft: bool = False) -> str:
     """Generate an image from a text prompt.
 
+    Not for a new size or shape of an image you already made ("a square version of
+    the same design", "a social card from this banner"): generating again redraws a
+    different design. Use outpaint_image on the existing image instead.
+
     Args:
         prompt: What to draw — subject, style, composition, lighting. Renders
             legible text well (posters, logos, signs, title cards): put the exact
@@ -593,6 +597,13 @@ async def compose_images(image_refs: list[str], prompt: str) -> str:
 async def outpaint_image(image_ref: str, prompt: str = "", left: int = 0, top: int = 0,
                          right: int = 0, bottom: int = 0, seed: int = -1) -> str:
     """Extend an image's canvas outward (outpaint) by pixel margins.
+
+    The right tool for the SAME design in another shape or size: a square social
+    card from a wide banner, a tall story from a square, a wider hero. It keeps the
+    existing artwork exactly and only adds canvas. Work out the margins to reach the
+    target aspect: e.g. a 1200x624 banner -> square = top 288, bottom 288 (1200x1200);
+    split evenly so the design stays centred. Describe the new areas in prompt
+    (e.g. "extend the dark background, plain, no new objects or text").
 
     Args:
         image_ref: The image (media id, /media/ URL, data: URL, or path).

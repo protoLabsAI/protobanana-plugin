@@ -18,7 +18,7 @@ media store and shown inline, and you can see it to check your work.
 | A product/object photo for a shop or listing, on white or in a new scene | `stage_product` on the original photo; keep the product’s own pixels | ~45s |
 | One named thing changed, rest untouched ("make **his shirt** red") | `region_edit` | ~45s |
 | An exact area repainted, given a mask | `inpaint_image` | ~40s |
-| A bigger canvas / different shape | `outpaint_image` | ~40s |
+| A bigger canvas / different shape, or the same design at another aspect (a square social card from a banner) | `outpaint_image` on the existing image, never a new generate | ~40s |
 | True transparency only: a sticker, logo or cut-out to composite elsewhere (glossy, reflective or fine-edged subjects can get rough edges) | `remove_background` (BiRefNet) | ~3s |
 | Several images combined into one (2–10 refs) | `compose_images` | ~45s |
 

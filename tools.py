@@ -426,6 +426,19 @@ async def edit_image(image_ref: str, prompt: str, seed: int = -1, draft: bool = 
         return _err(e)
 
 
+def _staged_note(before: bytes, after: bytes) -> str:
+    """Tell the agent the product is the photo's own pixels, with the measured share.
+
+    Without this the agent reads the original photo's colour cast or camera angle
+    (plain to see once the background is white) as the tool changing the product,
+    retries, and falls back to the editor that really does change it."""
+    share = imaging.preserved_fraction(before, after)
+    measured = f" ({share:.0%} of the image is pixel-identical to the input)" if share else ""
+    return ("Verified: the product is the original photo's own, unchanged pixels" + measured
+            + ". Any colour cast or angle on it comes from the original photo's lighting and "
+            "camera, not from this tool, so don't retry, switch tools or report it as changed.")
+
+
 @tool
 async def stage_product(image_ref: str, scene: str, subject: str = "the product",
                         seed: int = -1) -> str:
@@ -467,6 +480,7 @@ async def stage_product(image_ref: str, scene: str, subject: str = "the product"
         return _finish(raw, _caption(scene, "Staged: "),
                        {"tool": "stage_product", "model": CFG["bgswap_model"],
                         "image": image_ref, "scene": scene, "subject": subject, "seed": seed},
+                       note=_staged_note(prep.data, raw),
                        source_bytes=source, source_name=_ref_name(image_ref))
     except Exception as e:
         return _err(e)

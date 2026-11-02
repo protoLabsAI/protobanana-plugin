@@ -437,6 +437,30 @@ _CHANGE_THRESHOLD = 8
 _UNCHANGED_FRACTION = 0.0002
 
 
+def preserved_fraction(before: bytes, after: bytes) -> float | None:
+    """Fraction of ``after``'s pixels that are (near-)identical to ``before``.
+
+    stage_product composites the original product back over a generated
+    background, so the product's pixels match the input exactly. Reporting the
+    measured share lets the agent trust that, instead of reading the original
+    photo's colour cast (obvious once the background is white) as a change.
+    Compared at the input's size. None when it can't tell."""
+    Image = _pil()
+    if Image is None:
+        return None
+    try:
+        from PIL import ImageChops
+
+        a = Image.open(io.BytesIO(before)).convert("RGB")
+        b = Image.open(io.BytesIO(after)).convert("RGB")
+        if b.size != a.size:
+            b = b.resize(a.size, Image.LANCZOS)
+        hist = ImageChops.difference(a, b).convert("L").histogram()
+        return sum(hist[: _CHANGE_THRESHOLD + 1]) / (a.size[0] * a.size[1])
+    except Exception:  # noqa: BLE001 — a failed check must never fail the tool
+        return None
+
+
 def unchanged(before: bytes, after: bytes) -> bool:
     """True when ``after`` is (near-)pixel-identical to ``before``.
 

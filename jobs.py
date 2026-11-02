@@ -341,9 +341,14 @@ async def _dispatch(st: dict) -> bytes:
                                              "negative_prompt": params.get("negative_prompt") or None},
                                      mask=mask)
         if op == "stage_product":
-            return await client.edit(alias, params["scene"], image,
-                                     fields={"grounding": params.get("subject", "the product"),
-                                             "seed": seed})
+            subject = params.get("subject") or "the product"
+            raw = await client.edit(alias, params["scene"], image,
+                                    fields={"grounding": subject, "seed": seed})
+            if imaging.subject_missing(image, raw):
+                raise ValueError(
+                    f"couldn't find {subject!r} in the photo, so nothing was kept; set the "
+                    "subject to a short noun phrase for the product (e.g. \"the mug\")")
+            return raw
         if op == "region_edit":
             raw = await client.edit(alias, params.get("prompt", ""), image,
                                     fields={"grounding": params.get("grounding") or params.get("region"),
